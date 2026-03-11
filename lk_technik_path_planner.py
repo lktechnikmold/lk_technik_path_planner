@@ -54,8 +54,7 @@ from qgis.PyQt.QtWidgets import (
 
 from qgis.core import (
     Qgis, QgsProject, QgsVectorLayer, QgsField, QgsFields, QgsFeature, QgsGeometry, QgsPointXY,
-    QgsLayerTreeGroup, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsVectorFileWriter,
-    QgsSingleSymbolRenderer
+    QgsLayerTreeGroup, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsVectorFileWriter
 )
 
 def _tr(message: str) -> str:
@@ -83,7 +82,6 @@ def _norm_name(s: str) -> str:
     return " ".join((s or "").split())
 
 def _field_map(layer: QgsVectorLayer) -> dict:
-    """maps lowercase fieldname -> actual fieldname"""
     return {f.name().lower(): f.name() for f in layer.fields()}
 
 def _pick_field(fmap: dict, *candidates: str):
@@ -904,21 +902,10 @@ class LkTechnikPathPlanner:
         per_frm_layers = {}
         per_frm_groups = {}
 
-        def _norm_name(s: str) -> str:
-            # trim + Mehrfachleerzeichen auf 1 reduzieren
-            return " ".join((s or "").split())
-
-        def _find_or_create_group(root_group, name: str) -> QgsLayerTreeGroup:
-            name_n = _norm_name(name)
-            for ch in root_group.children():
-                if isinstance(ch, QgsLayerTreeGroup) and _norm_name(ch.name()) == name_n:
-                    return ch
-            return root_group.addGroup(name_n)
-
         def _ensure_hierarchy(ctr_name: str, frm_name: str) -> QgsLayerTreeGroup:
             root_g = project.layerTreeRoot()
-            ctr_grp = _find_or_create_group(root_g, ctr_name)
-            frm_grp = _find_or_create_group(ctr_grp, frm_name)
+            ctr_grp = self._find_or_create_group(root_g, ctr_name)
+            frm_grp = self._find_or_create_group(ctr_grp, frm_name)
             return frm_grp
 
         def _create_frm_layers():
@@ -958,7 +945,6 @@ class LkTechnikPathPlanner:
             base = os.path.join(out_dir, _safe(ctr_name), _safe(frm_name))
             os.makedirs(base, exist_ok=True)
             new_layers = {}
-            from qgis.core import QgsVectorFileWriter
             tr_ctx = project.transformContext()
             for key, mem_layer in layers_dict.items():
                 gpkg_path = os.path.join(base, f"{_safe(key)}.gpkg")
@@ -1476,29 +1462,44 @@ class LkTechnikPathPlanner:
                                             lonl, latl = _to_wgs_xy_from_point(pt, ct_line)
                                             ET.SubElement(inner_lsg_extra, 'PNT', {'A': a_val, 'C': str(latl), 'D': str(lonl)})
                             else:
-                                for track_feature in line_layer.getFeatures():
-                                    match_ok = False
-                                    for cand in ('ID', 'id', 'field_id'):
-                                        if cand in line_names:
-                                            try:
-                                                match_ok = int(track_feature[cand]) == int(field_id)
-                                            except Exception:
-                                                match_ok = False
-                                            break
-                                    if not match_ok:
-                                        continue
-                                    track_name = track_feature['Name'] if 'Name' in line_names else ''
-                                    ggp_element = ET.SubElement(pfd_element, 'GGP', {
-                                        'A': next_ggp_id(),
-                                        'B': track_name
-                                    })
+                                line_fmap = _field_map(line_layer)
+                                id_attr   = _pick_field(line_fmap, "ID", "field_id")
+                                seg_attr  = _pick_field(line_fmap, "Segment")
+                                name_attr = _pick_field(line_fmap, "Name")
 
+                                for track_feature in line_layer.getFeatures():
+                                    if id_attr is None:
+                                        continue
+
+                                    try:
+                                        if int(track_feature[id_attr]) != int(field_id):
+                                            continue
+                                    except Exception:
+                                        continue
+
+                                    # Wenn Kontursegmente NICHT exportiert werden:
+                                    # Spuren mit gefülltem Segment-Feld ignorieren
+                                    if seg_attr is not None:
+                                        seg_val = track_feature[seg_attr]
+                                        if not _is_nullish(seg_val):
+                                            continue
+
+                                    track_name = str(track_feature[name_attr]).strip() if name_attr else ''
 
                                     lines = track_feature.geometry().asMultiPolyline() or []
                                     if not lines:
                                         single = track_feature.geometry().asPolyline()
                                         if single:
                                             lines = [single]
+
+                                    if not lines:
+                                        continue
+
+                                    ggp_element = ET.SubElement(pfd_element, 'GGP', {
+                                        'A': next_ggp_id(),
+                                        'B': track_name
+                                    })
+
                                     for line in lines:
                                         c_value = '3' if len(line) > 2 else '1'
                                         gpn_element = ET.SubElement(ggp_element, 'GPN', {
@@ -1510,7 +1511,11 @@ class LkTechnikPathPlanner:
                                         for i, pt in enumerate(line):
                                             a_val = "6" if i == 0 else ("7" if i == len(line) - 1 else "9")
                                             lonl, latl = _to_wgs_xy_from_point(pt, ct_line)
-                                            ET.SubElement(lsg_element_, 'PNT', {'A': a_val, 'C': str(latl), 'D': str(lonl)})
+                                            ET.SubElement(lsg_element_, 'PNT', {
+                                                'A': a_val,
+                                                'C': str(latl),
+                                                'D': str(lonl)
+                                            })
                     exported_any = True
 
         xml_bytes = ET.tostring(root_xml, encoding='utf-8')
@@ -1526,5 +1531,5 @@ class LkTechnikPathPlanner:
         if not exported_any:
             self.iface.messageBar().pushMessage("Hinweis", "Keine passenden Gruppen/Layer gefunden – leere TASKDATA.XML geschrieben.", level=Qgis.Info, duration=6)
         else:
-            self.iface.messageBar().pushMessage("Success", f"TASKDATA.XML geschrieben: {output_file_path}", level=Qgis.Success, duration=4)
+            self.iface.messageBar().pushMessage("Erfolgreich", f"TASKDATA.XML geschrieben: {output_file_path}", level=Qgis.Success, duration=4)
         self.dlg.accept()
