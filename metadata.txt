@@ -1,0 +1,29 @@
+[general]
+name=LK-Technik Path Planner
+qgisMinimumVersion=3.16
+qgisMaximumVersion=3.99
+version=1.0.0
+author=Florian Köck
+email=florian.koeck@lk-noe.at
+category=Analysis
+icon=icons/logo.png
+license=GPL-3.0-or-later
+homepage=https://noe.lko.at
+repository=https://github.com/<ORG>/<REPO>
+tracker=https://github.com/<ORG>/<REPO>/issues
+description=Import und Export von ISOXML-Dateien für Lenksysteme
+about=Combined plugin for ISOXML import and export.
+ Provides a structured selection tree (Customer -> Farm -> Fields) and supports ISOXML v3 and v4, including optional contour segments.
+ 
+ DISCLAIMER:
+ This plugin is distributed under the GNU General Public License v3.0 (or later).
+ It is provided WITHOUT ANY WARRANTY, without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ See the LICENSE file for details.
+ 
+ User guide:
+ https://www.youtube.com/playlist?list=PLBJSn-Fmyqo9rBs2AY4UGp8IYx5PcxJxG
+ 
+ Copyright (C) 2024-2025 Landwirtschaftskammer Niederösterreich
+ Developed by Florian Köck (LK-Technik Mold)
+experimental=False
+deprecated=False
