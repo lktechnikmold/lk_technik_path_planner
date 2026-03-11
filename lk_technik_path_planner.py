@@ -80,6 +80,26 @@ def _is_nullish(v):
 def _safe(name: str) -> str:
     return (name or "_untitled_").replace(os.sep, "_").replace("/", "_").strip()
 
+def _field_map(layer: QgsVectorLayer) -> dict:
+    """maps lowercase fieldname -> actual fieldname"""
+    return {f.name().lower(): f.name() for f in layer.fields()}
+
+def _pick_field(fmap: dict, *candidates: str):
+    for c in candidates:
+        n = fmap.get(c.lower())
+        if n:
+            return n
+    return None
+
+def _feat_val(feat: QgsFeature, fmap: dict, *candidates: str, default=None):
+    fn = _pick_field(fmap, *candidates)
+    if fn is None:
+        return default
+    try:
+        return feat[fn]
+    except Exception:
+        return default
+
 class ToolboxDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -243,13 +263,21 @@ class ToolboxDialog(QDialog):
                         break
                 if poly_layer is None:
                     continue
-                name_fields = poly_layer.fields().names()
-                has_name = 'Name' in name_fields
-                has_id   = 'ID' in name_fields
+                fmap = _field_map(poly_layer)
+                name_field = _pick_field(fmap, "Name")
+                id_field   = _pick_field(fmap, "ID")
+
                 for feat in poly_layer.getFeatures():
-                    label = str(feat['Name'] if has_name else feat.id())
+                    label = str(feat[name_field]) if name_field else str(feat.id())
                     item = QTreeWidgetItem([label])
-                    item.setData(0, Qt.UserRole, int(feat['ID']) if has_id else int(feat.id()))
+
+                    stored_id = feat[id_field] if id_field else feat.id()
+                    try:
+                        stored_id = int(stored_id)
+                    except Exception:
+                        stored_id = int(feat.id())
+
+                    item.setData(0, Qt.UserRole, stored_id)
                     item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
                     item.setCheckState(0, Qt.Checked)
                     frm_item.addChild(item)
@@ -714,14 +742,23 @@ class LkTechnikPathPlanner:
 
                 field_ids_filter = selected[ctr_name][frm_name]
 
-                poly_names = polygon_layer.fields().names()
+                poly_fmap = _field_map(polygon_layer)
+                id_field   = _pick_field(poly_fmap, "ID")
+                name_field = _pick_field(poly_fmap, "Name")
+                area_field = _pick_field(poly_fmap, "Flaeche")
+
                 for field_feature in polygon_layer.getFeatures():
-                    field_id = int(field_feature['ID']) if 'ID' in poly_names else int(field_feature.id())
+                    raw_id = field_feature[id_field] if id_field else field_feature.id()
+                    try:
+                        field_id = int(raw_id)
+                    except Exception:
+                        field_id = int(field_feature.id())
+
                     if (field_ids_filter is not None) and (field_id not in field_ids_filter):
                         continue
 
-                    field_name = field_feature['Name'] if 'Name' in poly_names else str(field_feature.id())
-                    field_area = field_feature['Flaeche'] if 'Flaeche' in poly_names else 0
+                    field_name = field_feature[name_field] if name_field else str(field_feature.id())
+                    field_area = field_feature[area_field] if area_field else 0
 
                     pfd_element = ET.SubElement(root_xml, 'PFD', {
                         'A': f'PFD{field_id}', 'C': str(field_name), 'D': str(int(field_area)), 'E': ctr_id, 'F': frm_id
@@ -749,15 +786,14 @@ class LkTechnikPathPlanner:
                     if fh_layer is not None:
                         fh_names = fh_layer.fields().names()
                         for fh_feature in fh_layer.getFeatures():
-                            match_ok = False
-                            for cand in ('ID', 'id', 'field_id'):
-                                if cand in fh_names:
-                                    try:
-                                        match_ok = int(fh_feature[cand]) == int(field_id)
-                                    except Exception:
-                                        match_ok = False
-                                    break
-                            if not match_ok:
+                            fh_fmap = _field_map(fh_layer)
+                            raw = _feat_val(fh_feature, fh_fmap, "ID", "field_id", default=None)
+                            if raw is None:
+                                continue
+                            try:
+                                if int(raw) != int(field_id):
+                                    continue
+                            except Exception:
                                 continue
                             bf_val = fh_feature['befahrbar'] if 'befahrbar' in fh_names else 0
                             impass_val = "1" if bf_val == 0 else "0"
@@ -778,15 +814,14 @@ class LkTechnikPathPlanner:
                     if point_layer is not None:
                         p_names = point_layer.fields().names()
                         for hindernis in point_layer.getFeatures():
-                            match_ok = False
-                            for cand in ('ID', 'id', 'field_id'):
-                                if cand in p_names:
-                                    try:
-                                        match_ok = int(hindernis[cand]) == int(field_id)
-                                    except Exception:
-                                        match_ok = False
-                                    break
-                            if not match_ok:
+                            p_fmap = _field_map(point_layer)
+                            raw = _feat_val(hindernis, p_fmap, "ID", "field_id", default=None)
+                            if raw is None:
+                                continue
+                            try:
+                                if int(raw) != int(field_id):
+                                    continue
+                            except Exception:
                                 continue
                             bf_val = hindernis['befahrbar'] if 'befahrbar' in p_names else 1
                             a_val = "1" if bf_val == 1 else "5"
@@ -801,15 +836,14 @@ class LkTechnikPathPlanner:
                         line_names = line_layer.fields().names()
                         if is_v3:
                             for track_feature in line_layer.getFeatures():
-                                match_ok = False
-                                for cand in ('ID', 'id', 'field_id'):
-                                    if cand in line_names:
-                                        try:
-                                            match_ok = int(track_feature[cand]) == int(field_id)
-                                        except Exception:
-                                            match_ok = False
-                                        break
-                                if not match_ok:
+                                line_fmap = _field_map(line_layer)
+                                raw = _feat_val(track_feature, line_fmap, "ID", "field_id", default=None)
+                                if raw is None:
+                                    continue
+                                try:
+                                    if int(raw) != int(field_id):
+                                        continue
+                                except Exception:
                                     continue
                                 lines = track_feature.geometry().asMultiPolyline() or []
                                 if not lines:
@@ -825,19 +859,21 @@ class LkTechnikPathPlanner:
                                         ET.SubElement(lsg_line, 'PNT', {'A': a_val, 'C': str(latl), 'D': str(lonl)})
                         else:
                             if use_segments:
-                                seg_attr = 'Segment' if 'Segment' in line_names else ('segment' if 'segment' in line_names else ('SEGMENT' if 'SEGMENT' in line_names else None))
+                                line_fmap = _field_map(line_layer)              # lowercase -> echter Feldname
+                                seg_attr  = _pick_field(line_fmap, "Segment")   # egal ob Segment/segment/SEGMENT/SegMent/...
+                                id_attr   = _pick_field(line_fmap, "ID", "field_id")  # egal ob ID/id/Id/FIELD_ID/...
+                                name_attr = _pick_field(line_fmap, "Name")      # optional, falls du Name auch robust willst
                                 segments = {}
                                 non_segment = []
                                 for track_feature in line_layer.getFeatures():
-                                    match_ok = False
-                                    for cand in ('ID', 'id', 'field_id'):
-                                        if cand in line_names:
-                                            try:
-                                                match_ok = int(track_feature[cand]) == int(field_id)
-                                            except Exception:
-                                                match_ok = False
-                                            break
-                                    if not match_ok:
+                                    if id_attr is None:
+                                        continue  # ohne Zuordnungsfeld kann man nicht filtern
+
+                                    raw = track_feature[id_attr]
+                                    try:
+                                        if int(raw) != int(field_id):
+                                            continue
+                                    except Exception:
                                         continue
                                     if seg_attr is None:
                                         segments.setdefault('Kontur', []).append(track_feature)
