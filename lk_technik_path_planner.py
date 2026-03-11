@@ -478,9 +478,14 @@ class LkTechnikPathPlanner:
         def _ensure_frm(frm_id: str, ctr_name_hint: str = None):
             if frm_id in per_frm_layers:
                 return per_frm_layers[frm_id], per_frm_groups[frm_id]
-            info = frm_map.get(frm_id, {"name": frm_id, "ctr": None})
-            ctr_name = ctr_map.get(info.get("ctr"), info.get("ctr") or ctr_name_hint or "Unbekannter_Kunde")
-            frm_name = info.get("name") or frm_id
+            # Platzhalter/fehlende FRM sauber abfangen
+            if frm_id in (None, "", "__UNBENANNT_FRM__"):
+                ctr_name = ctr_name_hint or "Unbenannter Kunde"
+                frm_name = "Unbenannter Betrieb"
+            else:
+                info = frm_map.get(frm_id, {"name": frm_id, "ctr": None})
+                ctr_name = ctr_map.get(info.get("ctr"), info.get("ctr") or ctr_name_hint or "Unbenannter Kunde")
+                frm_name = info.get("name") or frm_id
             frm_group = _ensure_hierarchy(ctr_name, frm_name)
             layers = _create_frm_layers()
             for lyr in layers.values():
@@ -496,7 +501,7 @@ class LkTechnikPathPlanner:
             pfd_id = pfd.get("A") or pfd.get("PFDId") or "PFD0"
             pfd_name = pfd.get("C") or pfd.get("B") or ""
             pfd_area = pfd.get("D", "0")
-            frm_ref = pfd.get("F") or pfd.get("FRMIdRef") or pfd.get("C")
+            frm_ref = pfd.get("F") or pfd.get("FRMIdRef")
             try:
                 numeric_id = int(''.join(ch for ch in pfd_id if ch.isdigit()) or 0)
             except Exception:
@@ -507,8 +512,16 @@ class LkTechnikPathPlanner:
                 area_val = 0.0
 
             ctr_ref_from_pfd = pfd.get("E") or pfd.get("CTRIdRef")
-            ctr_name_hint = ctr_map.get(ctr_ref_from_pfd, ctr_ref_from_pfd or "Unbekannter_Kunde")
-            frm_layers, _grp = _ensure_frm(frm_ref or "FRM", ctr_name_hint)
+
+            # Default-Hierarchie, wenn im ISOXML wirklich nichts referenziert wird
+            if not ctr_ref_from_pfd and not frm_ref:
+                ctr_name_hint = "Unbenannter Kunde"
+                frm_ref = "__UNBENANNT_FRM__"   # interner Schlüssel, damit Layer gesammelt werden
+            else:
+                ctr_name_hint = ctr_map.get(ctr_ref_from_pfd, ctr_ref_from_pfd or "Unbenannter Kunde")
+
+            frm_layers, _grp = _ensure_frm(frm_ref or "__UNBENANNT_FRM__", ctr_name_hint)
+
             field_layer = frm_layers["Feldgrenzen"]; line_layer = frm_layers["Fahrspuren"]
             point_layer = frm_layers["Punkthindernis"]; area_layer = frm_layers["Flaechenhindernis"]
             dp_field = field_layer.dataProvider(); dp_line = line_layer.dataProvider()
