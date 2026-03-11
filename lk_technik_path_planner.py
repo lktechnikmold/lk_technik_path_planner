@@ -144,6 +144,7 @@ class ToolboxDialog(QDialog):
         btn_row.addWidget(self.run_button)
         btn_row.addWidget(self.cancel_button)
         root.addLayout(btn_row)
+        self._updating_checks = False
 
     def _sync_mode(self):
         self.stack.setCurrentIndex(0 if self.mode_export.isChecked() else 1)
@@ -189,6 +190,7 @@ class ToolboxDialog(QDialog):
         self.tree.setHeaderLabels(["Kunde / Betrieb / Feld (Feldgrenzen)"])
         self.tree.setColumnCount(1)
         self.tree.setSelectionMode(QTreeWidget.NoSelection)
+        self.tree.itemChanged.connect(self._on_tree_item_changed)
         v.addWidget(QLabel("Wähle, was exportiert werden soll:"))
         v.addWidget(self.tree, 1)
 
@@ -313,6 +315,84 @@ class ToolboxDialog(QDialog):
             if frm_map:
                 res[ctr_name] = frm_map
         return res
+
+    def _set_checkstate_recursive(self, item: QTreeWidgetItem, state: Qt.CheckState):
+        """Setzt CheckState für item + alle Kinder rekursiv."""
+        item.setCheckState(0, state)
+        for i in range(item.childCount()):
+            self._set_checkstate_recursive(item.child(i), state)
+    
+    def _set_parent_checked(self, item: QTreeWidgetItem):
+        """Setzt alle Eltern des Items auf Checked (damit Export-Auswahl nicht leer ist)."""
+        p = item.parent()
+        while p is not None:
+            if p.checkState(0) != Qt.Checked:
+                p.setCheckState(0, Qt.Checked)
+            p = p.parent()
+
+    def _update_parent_state_from_children(self, item: QTreeWidgetItem):
+        """
+        Optional: Elternstatus an Kinder anpassen.
+        - alle Kinder Checked => Parent Checked
+        - alle Kinder Unchecked => Parent Unchecked
+        - gemischt => Parent PartiallyChecked
+        """
+        p = item.parent()
+        while p is not None:
+            checked = 0
+            unchecked = 0
+            for i in range(p.childCount()):
+                st = p.child(i).checkState(0)
+                if st == Qt.Checked:
+                    checked += 1
+                elif st == Qt.Unchecked:
+                    unchecked += 1
+                else:
+                    # PartiallyChecked zählt als gemischt
+                    checked += 1
+                    unchecked += 1
+
+            if checked == p.childCount():
+                new_state = Qt.Checked
+            elif unchecked == p.childCount():
+                new_state = Qt.Unchecked
+            else:
+                new_state = Qt.PartiallyChecked
+
+            if p.checkState(0) == new_state:
+                break
+
+            p.setCheckState(0, new_state)
+            p = p.parent()
+
+    def _on_tree_item_changed(self, item: QTreeWidgetItem, column: int):
+        if column != 0:
+            return
+        if self._updating_checks:
+            return
+
+        self._updating_checks = True
+        try:
+            state = item.checkState(0)
+
+            # Fall A: Kunde/Betrieb geklickt (hat Kinder) -> rekursiv auf Kinder anwenden
+            if item.childCount() > 0:
+                for i in range(item.childCount()):
+                    self._set_checkstate_recursive(item.child(i), state)
+                # optional Eltern darüber aktualisieren (falls Betrieb unter Kunde)
+                self._update_parent_state_from_children(item)
+                return
+
+            # Fall B: Feld (Leaf) geklickt -> Eltern automatisch setzen
+            if state == Qt.Checked:
+                # sobald ein Feld aktiv ist -> Betrieb + Kunde aktiv
+                self._set_parent_checked(item)
+            else:
+                # optional: wenn Feld abgewählt wird, Elternstatus sauber nachziehen
+                self._update_parent_state_from_children(item)
+
+        finally:
+            self._updating_checks = False
 
 class LkTechnikPathPlanner:
     def __init__(self, iface):
