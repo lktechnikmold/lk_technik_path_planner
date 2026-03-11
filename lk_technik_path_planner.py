@@ -51,12 +51,12 @@ except Exception:
 from qgis.PyQt.QtWidgets import (
     QAction, QDialog, QFileDialog, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem,
     QPushButton, QLineEdit, QLabel, QGroupBox, QCheckBox, QRadioButton, QStackedWidget,
-    QFormLayout
+    QFormLayout, QInputDialog, QMessageBox
 )
 
 from qgis.core import (
     Qgis, QgsProject, QgsVectorLayer, QgsField, QgsFields, QgsFeature, QgsGeometry, QgsPointXY,
-    QgsLayerTreeGroup, QgsCoordinateReferenceSystem, QgsCoordinateTransform
+    QgsLayerTreeGroup, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsVectorFileWriter
 )
 
 def _tr(message: str) -> str:
@@ -79,6 +79,9 @@ def _is_nullish(v):
 
 def _safe(name: str) -> str:
     return (name or "_untitled_").replace(os.sep, "_").replace("/", "_").strip()
+
+def _norm_name(s: str) -> str:
+    return " ".join((s or "").split())
 
 def _field_map(layer: QgsVectorLayer) -> dict:
     """maps lowercase fieldname -> actual fieldname"""
@@ -193,6 +196,14 @@ class ToolboxDialog(QDialog):
         self.tree.itemChanged.connect(self._on_tree_item_changed)
         v.addWidget(QLabel("Wähle, was exportiert werden soll:"))
         v.addWidget(self.tree, 1)
+        # Buttons: Kunde / Betrieb hinzufügen
+        add_row = QHBoxLayout()
+        self.btn_add_ctr = QPushButton("Kunde hinzufügen")
+        self.btn_add_frm = QPushButton("Betrieb hinzufügen")
+        add_row.addWidget(self.btn_add_ctr)
+        add_row.addWidget(self.btn_add_frm)
+        add_row.addStretch(1)
+        v.addLayout(add_row)
 
         return w
 
@@ -428,6 +439,11 @@ class LkTechnikPathPlanner:
             self.first_start = False
             self.dlg = ToolboxDialog(self.iface.mainWindow())
             self.dlg.run_button.clicked.connect(self._on_run)
+
+            # Buttons nur EINMAL verbinden:
+            self.dlg.btn_add_ctr.clicked.connect(self._ui_add_customer)
+            self.dlg.btn_add_frm.clicked.connect(self._ui_add_farm)
+
         self.dlg.refresh_tree()
         self.dlg.show()
         self.dlg.exec_()
@@ -437,6 +453,191 @@ class LkTechnikPathPlanner:
             self._do_export()
         else:
             self._do_import()
+    
+    def _find_or_create_group(self, parent_group: QgsLayerTreeGroup, name: str) -> QgsLayerTreeGroup:
+        name_n = _norm_name(name)
+        for ch in parent_group.children():
+            if isinstance(ch, QgsLayerTreeGroup) and _norm_name(ch.name()) == name_n:
+                return ch
+        return parent_group.addGroup(name_n)
+
+    def _get_project_base_dir(self) -> str:
+        """
+        Ablageort für automatisch erzeugte GPKGs:
+        - bevorzugt: QgsProject.homePath()
+        - sonst: User wird gefragt
+        """
+        project = QgsProject.instance()
+        base = (project.homePath() or "").strip()
+        if base and os.path.isdir(base):
+            return base
+
+        dn = QFileDialog.getExistingDirectory(self.iface.mainWindow(), "Ablageordner für neue Betriebe wählen")
+        return dn or ""
+
+    def _ensure_frm_layers_on_disk(self, ctr_name: str, frm_name: str, frm_group: QgsLayerTreeGroup):
+        """
+        Erstellt 4 leere Layer als GPKG und lädt sie in die Gruppe,
+        falls sie dort noch nicht existieren.
+        """
+        project = QgsProject.instance()
+        crs_authid = project.crs().authid() if project.crs().isValid() else "EPSG:4326"
+
+        base_dir = self._get_project_base_dir()
+        if not base_dir:
+            self.iface.messageBar().pushMessage(
+                "Abgebrochen", "Kein Ablageordner gewählt – Betrieb wurde nicht erstellt.",
+                level=Qgis.Info, duration=4
+            )
+            return
+
+        target_dir = os.path.join(base_dir, _safe(ctr_name), _safe(frm_name))
+        os.makedirs(target_dir, exist_ok=True)
+
+        # Ziel: keine Duplikate in der Gruppe
+        existing_names = set()
+        for ch in frm_group.children():
+            try:
+                lyr = ch.layer()
+            except Exception:
+                lyr = None
+            if isinstance(lyr, QgsVectorLayer):
+                existing_names.add(lyr.name())
+
+        def _write_empty_layer_to_gpkg(layer: QgsVectorLayer, gpkg_path: str, layername: str) -> QgsVectorLayer:
+            opts = QgsVectorFileWriter.SaveVectorOptions()
+            opts.driverName = "GPKG"
+            opts.layerName = layername
+
+            ret = QgsVectorFileWriter.writeAsVectorFormatV3(
+                layer, gpkg_path, project.transformContext(), opts
+            )
+
+            # je nach QGIS-Version: ret kann (res, err) oder (res, err, newFileName, newLayerName, ...) sein
+            res = ret[0] if isinstance(ret, (tuple, list)) else ret
+            err = ret[1] if isinstance(ret, (tuple, list)) and len(ret) > 1 else ""
+
+            if res != QgsVectorFileWriter.NoError:
+                raise RuntimeError(err or f"Write error {res}")
+
+            uri = f"{gpkg_path}|layername={layername}"
+            file_layer = QgsVectorLayer(uri, layername, "ogr")
+            if not file_layer.isValid():
+                raise RuntimeError(f"Konnte Layer nicht laden: {uri}")
+            return file_layer
+
+        # 1) Feldgrenzen
+        if "Feldgrenzen" not in existing_names:
+            mem = QgsVectorLayer(f"MultiPolygon?crs={crs_authid}", "Feldgrenzen", "memory")
+            dp = mem.dataProvider()
+            dp.addAttributes([
+                QgsField("ID", QVariant.Int),
+                QgsField("Name", QVariant.String),
+                QgsField("Flaeche", QVariant.Double),
+            ])
+            mem.updateFields()
+
+            gpkg = os.path.join(target_dir, "Feldgrenzen.gpkg")
+            lyr = _write_empty_layer_to_gpkg(mem, gpkg, "Feldgrenzen")
+            project.addMapLayer(lyr, False)
+            frm_group.addLayer(lyr)
+
+        # 2) Fahrspuren
+        if "Fahrspuren" not in existing_names:
+            mem = QgsVectorLayer(f"MultiLineString?crs={crs_authid}", "Fahrspuren", "memory")
+            dp = mem.dataProvider()
+            dp.addAttributes([
+                QgsField("ID", QVariant.Int),
+                QgsField("Name", QVariant.String),
+                QgsField("Segment", QVariant.String),
+            ])
+            mem.updateFields()
+
+            gpkg = os.path.join(target_dir, "Fahrspuren.gpkg")
+            lyr = _write_empty_layer_to_gpkg(mem, gpkg, "Fahrspuren")
+            project.addMapLayer(lyr, False)
+            frm_group.addLayer(lyr)
+
+        # 3) Punkthindernis
+        if "Punkthindernis" not in existing_names:
+            mem = QgsVectorLayer(f"Point?crs={crs_authid}", "Punkthindernis", "memory")
+            dp = mem.dataProvider()
+            dp.addAttributes([
+                QgsField("ID", QVariant.Int),
+                QgsField("Name", QVariant.String),
+                QgsField("befahrbar", QVariant.Int),
+            ])
+            mem.updateFields()
+
+            gpkg = os.path.join(target_dir, "Punkthindernis.gpkg")
+            lyr = _write_empty_layer_to_gpkg(mem, gpkg, "Punkthindernis")
+            project.addMapLayer(lyr, False)
+            frm_group.addLayer(lyr)
+
+        # 4) Flaechenhindernis
+        if "Flaechenhindernis" not in existing_names:
+            mem = QgsVectorLayer(f"MultiPolygon?crs={crs_authid}", "Flaechenhindernis", "memory")
+            dp = mem.dataProvider()
+            dp.addAttributes([
+                QgsField("ID", QVariant.Int),
+                QgsField("befahrbar", QVariant.Int),
+            ])
+            mem.updateFields()
+
+            gpkg = os.path.join(target_dir, "Flaechenhindernis.gpkg")
+            lyr = _write_empty_layer_to_gpkg(mem, gpkg, "Flaechenhindernis")
+            project.addMapLayer(lyr, False)
+            frm_group.addLayer(lyr)
+
+    def _ui_add_customer(self):
+        name, ok = QInputDialog.getText(self.iface.mainWindow(), "Kunde hinzufügen", "Kundenname:")
+        if not ok:
+            return
+        name = _norm_name(name)
+        if not name:
+            return
+
+        root = QgsProject.instance().layerTreeRoot()
+        _ = self._find_or_create_group(root, name)
+
+        self.dlg.refresh_tree()
+        self.iface.messageBar().pushMessage("OK", f"Kunde '{name}' angelegt.", level=Qgis.Success, duration=3)
+
+    def _ui_add_farm(self):
+        project = QgsProject.instance()
+        root = project.layerTreeRoot()
+
+        # Kundenliste = Root-Gruppen
+        customers = [ch.name() for ch in root.children() if isinstance(ch, QgsLayerTreeGroup)]
+        if not customers:
+            QMessageBox.information(self.iface.mainWindow(), "Hinweis", "Es gibt noch keinen Kunden. Bitte zuerst einen Kunden anlegen.")
+            return
+
+        ctr_name, ok = QInputDialog.getItem(self.iface.mainWindow(), "Betrieb hinzufügen", "Kunde auswählen:", customers, 0, False)
+        if not ok:
+            return
+        ctr_name = _norm_name(ctr_name)
+
+        frm_name, ok = QInputDialog.getText(self.iface.mainWindow(), "Betrieb hinzufügen", "Betriebsname:")
+        if not ok:
+            return
+        frm_name = _norm_name(frm_name)
+        if not frm_name:
+            return
+
+        # Gruppe holen/erstellen
+        ctr_group = self._find_or_create_group(root, ctr_name)
+        frm_group = self._find_or_create_group(ctr_group, frm_name)
+
+        # Layer erzeugen
+        try:
+            self._ensure_frm_layers_on_disk(ctr_name, frm_name, frm_group)
+        except Exception as e:
+            self.iface.messageBar().pushMessage("Fehler", f"Konnte Betrieb/Layers nicht erstellen: {e}", level=Qgis.Critical, duration=6)
+            return
+
+        self.dlg.refresh_tree()
+        self.iface.messageBar().pushMessage("OK", f"Betrieb '{frm_name}' mit Layern erstellt.", level=Qgis.Success, duration=4)
 
     # ------------------------- IMPORT -------------------------
     def _do_import(self):
