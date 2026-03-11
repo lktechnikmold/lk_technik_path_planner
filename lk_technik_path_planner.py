@@ -405,11 +405,16 @@ class LkTechnikPathPlanner:
         per_frm_layers = {}
         per_frm_groups = {}
 
+        def _norm_name(s: str) -> str:
+            # trim + Mehrfachleerzeichen auf 1 reduzieren
+            return " ".join((s or "").split())
+
         def _find_or_create_group(root_group, name: str) -> QgsLayerTreeGroup:
+            name_n = _norm_name(name)
             for ch in root_group.children():
-                if isinstance(ch, QgsLayerTreeGroup) and ch.name() == name:
+                if isinstance(ch, QgsLayerTreeGroup) and _norm_name(ch.name()) == name_n:
                     return ch
-            return root_group.addGroup(name)
+            return root_group.addGroup(name_n)
 
         def _ensure_hierarchy(ctr_name: str, frm_name: str) -> QgsLayerTreeGroup:
             root_g = project.layerTreeRoot()
@@ -476,24 +481,35 @@ class LkTechnikPathPlanner:
             return new_layers
 
         def _ensure_frm(frm_id: str, ctr_name_hint: str = None):
-            if frm_id in per_frm_layers:
-                return per_frm_layers[frm_id], per_frm_groups[frm_id]
-            # Platzhalter/fehlende FRM sauber abfangen
+            # --- Namen bestimmen (und normalisieren) ---
             if frm_id in (None, "", "__UNBENANNT_FRM__"):
-                ctr_name = ctr_name_hint or "Unbenannter Kunde"
-                frm_name = "Unbenannter Betrieb"
+                ctr_name = _norm_name(ctr_name_hint or "Unbenannter Kunde")
+                frm_name = _norm_name("Unbenannter Betrieb")
             else:
                 info = frm_map.get(frm_id, {"name": frm_id, "ctr": None})
                 ctr_name = ctr_map.get(info.get("ctr"), info.get("ctr") or ctr_name_hint or "Unbenannter Kunde")
                 frm_name = info.get("name") or frm_id
+                ctr_name = _norm_name(ctr_name)
+                frm_name = _norm_name(frm_name)
+
+            # >>> NEU: Cache-Key nach Namen, nicht nach ID <<<
+            key = (ctr_name, frm_name)
+
+            # Wenn bereits existiert -> zusammenführen (gleiches Layer-Set wiederverwenden)
+            if key in per_frm_layers:
+                return per_frm_layers[key], per_frm_groups[key]
+
+            # sonst neu anlegen
             frm_group = _ensure_hierarchy(ctr_name, frm_name)
             layers = _create_frm_layers()
             for lyr in layers.values():
                 project.addMapLayer(lyr, False)
                 frm_group.addLayer(lyr)
+
             layers = _persist_frm_layers(layers, ctr_name, frm_name)
-            per_frm_layers[frm_id] = layers
-            per_frm_groups[frm_id] = frm_group
+
+            per_frm_layers[key] = layers
+            per_frm_groups[key] = frm_group
             return layers, frm_group
 
         # PFDs
