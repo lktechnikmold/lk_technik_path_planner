@@ -1135,23 +1135,63 @@ class LkTechnikPathPlanner:
 
     # ------------------------- EXPORT -------------------------
     def _do_export(self):
-        def _has_memory_layers():
+        def _find_required_memory_layers():
+            """
+            Prüft nur exportrelevante Layer in allen Kunden-/Betriebsgruppen.
+            Andere temporäre Layer im Projekt sind erlaubt.
+            """
+            required_names = {
+                "Feldgrenzen",
+                "Fahrspuren",
+                "Flaechenhindernis",
+                "Punkthindernis",
+            }
+
+            problems = []
             root = QgsProject.instance().layerTreeRoot()
-            for node in root.findLayers():
-                lyr = node.layer()
-                if isinstance(lyr, QgsVectorLayer):
-                    if lyr.providerType() == "memory":
-                        return True
-            return False
-            
-        if _has_memory_layers():
+
+            for ctr_node in root.children():
+                if not isinstance(ctr_node, QgsLayerTreeGroup):
+                    continue
+
+                ctr_name = ctr_node.name()
+
+                for frm_node in ctr_node.children():
+                    if not isinstance(frm_node, QgsLayerTreeGroup):
+                        continue
+
+                    frm_name = frm_node.name()
+
+                    for child in frm_node.children():
+                        try:
+                            lyr = child.layer()
+                        except Exception:
+                            lyr = None
+
+                        if not isinstance(lyr, QgsVectorLayer):
+                            continue
+
+                        if lyr.name() not in required_names:
+                            continue
+
+                        if lyr.providerType() == "memory":
+                            problems.append(f"{ctr_name} / {frm_name} / {lyr.name()}")
+
+            return problems
+
+        memory_problems = _find_required_memory_layers()
+        if memory_problems:
+            preview = "\n".join(memory_problems[:8])
+            if len(memory_problems) > 8:
+                preview += f"\n… und {len(memory_problems) - 8} weitere"
+
             self.iface.messageBar().pushMessage(
                 "Export nicht möglich",
-                "Es sind nicht gespeicherte Layer (Temporärlayer) im Projekt.\n"
-                "Bitte zuerst beim Import einen Ausgabeordner wählen\n"
-                "oder die Layer manuell speichern.",
+                "Folgende exportrelevante Layer sind noch temporär:\n"
+                f"{preview}\n\n"
+                "Bitte diese Layer zuerst dauerhaft speichern.",
                 level=Qgis.Warning,
-                duration=8
+                duration=10
             )
             return
 
