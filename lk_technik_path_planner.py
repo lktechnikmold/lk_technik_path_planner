@@ -520,9 +520,9 @@ class LkTechnikPathPlanner:
             # Point obstacles
             for pnt_h in pfd.findall("PNT"):
                 a_attr = pnt_h.get("A", "")
-                if a_attr in ["1", "5"]:
+                if a_attr in ["1", "2", "5"]:
                     lat = float(pnt_h.get("C", "0")); lon = float(pnt_h.get("D", "0"))
-                    hind_name = pnt_h.get("B", ""); bf_val = 1 if a_attr == "1" else 0
+                    hind_name = pnt_h.get("B", ""); bf_val = 0 if a_attr == "5" else 1
                     feat_pt = QgsFeature(point_layer.fields())
                     feat_pt.setAttribute("ID", numeric_id); feat_pt.setAttribute("Name", hind_name); feat_pt.setAttribute("befahrbar", bf_val)
                     feat_pt.setGeometry(QgsGeometry.fromPointXY(_tx_pt_xy(lon, lat)))

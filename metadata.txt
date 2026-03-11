@@ -2,7 +2,7 @@
 name=LK-Technik Path Planner
 qgisMinimumVersion=3.16
 qgisMaximumVersion=3.99
-version=1.0.0
+version=1.0.1
 author=Florian Köck
 email=florian.koeck@lk-noe.at
 category=Analysis
