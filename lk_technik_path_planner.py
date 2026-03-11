@@ -40,10 +40,8 @@ Date: 2025-11-04
 
 import os, os.path, math, xml.etree.ElementTree as ET, xml.dom.minidom
 
-import os, os.path, math, xml.etree.ElementTree as ET, xml.dom.minidom
-
 from qgis.PyQt.QtCore import Qt, QCoreApplication, QVariant
-from qgis.PyQt.QtGui import QIcon, QPixmap
+from qgis.PyQt.QtGui import QIcon, QPixmap, QColor
 try:
     from . import resources
 except Exception:
@@ -56,7 +54,8 @@ from qgis.PyQt.QtWidgets import (
 
 from qgis.core import (
     Qgis, QgsProject, QgsVectorLayer, QgsField, QgsFields, QgsFeature, QgsGeometry, QgsPointXY,
-    QgsLayerTreeGroup, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsVectorFileWriter
+    QgsLayerTreeGroup, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsVectorFileWriter,
+    QgsSingleSymbolRenderer
 )
 
 def _tr(message: str) -> str:
@@ -415,6 +414,206 @@ class LkTechnikPathPlanner:
     def tr(self, m):
         return _tr(m)
 
+    def _style_file_for_layer(self, layer_name: str) -> str:
+        """
+        Liefert den Pfad zur passenden QML-Datei im Plugin-Unterordner styles.
+        """
+        style_map = {
+            "Feldgrenzen": "Feldgrenzen.qml",
+            "Flaechenhindernis": "Flaechenhindernis.qml",
+            "Punkthindernis": "Punkthindernis.qml",
+            "Fahrspuren": "Fahrspuren.qml",
+        }
+
+        filename = style_map.get(layer_name)
+        if not filename:
+            return ""
+
+        plugin_dir = os.path.dirname(__file__)
+        style_path = os.path.join(plugin_dir, "styles", filename)
+        return style_path if os.path.exists(style_path) else ""
+
+    def _apply_predefined_style(self, layer: QgsVectorLayer):
+        """
+        Wendet den vordefinierten Style anhand des exakten Layernamens an.
+        """
+        if not layer or not isinstance(layer, QgsVectorLayer):
+            return
+
+        style_path = self._style_file_for_layer(layer.name())
+        if not style_path:
+            return
+
+        try:
+            result = layer.loadNamedStyle(style_path)
+
+            ok = True
+            msg = ""
+
+            if isinstance(result, tuple):
+                # QGIS liefert meist: (msg, ok)
+                if len(result) >= 2:
+                    msg = result[0]
+                    ok = result[1]
+                elif len(result) == 1:
+                    msg = str(result[0])
+
+            elif isinstance(result, bool):
+                ok = result
+
+            elif result is not None:
+                msg = str(result)
+
+            if not ok:
+                self.iface.messageBar().pushMessage(
+                    "Style-Warnung",
+                    f"Style für Layer '{layer.name()}' konnte nicht geladen werden: {msg}",
+                    level=Qgis.Warning,
+                    duration=4
+                )
+
+            layer.triggerRepaint()
+
+            try:
+                self.iface.layerTreeView().refreshLayerSymbology(layer.id())
+            except Exception:
+                pass
+
+        except Exception as e:
+            self.iface.messageBar().pushMessage(
+                "Style-Fehler",
+                f"Fehler beim Laden des Styles für '{layer.name()}': {e}",
+                level=Qgis.Warning,
+                duration=4
+            )
+    def _betrieb_palette(self):
+        return [
+            QColor(230, 57, 70),    # rot
+            QColor(46, 125, 50),    # grün
+            QColor(245, 158, 11),   # orange
+            QColor(123, 31, 162),   # violett
+            QColor(0, 121, 107),    # türkis
+            QColor(198, 40, 40),    # dunkelrot
+            QColor(2, 136, 209),    # hellblau
+            QColor(124, 179, 66),   # hellgrün
+            QColor(255, 112, 67),   # koralle
+            QColor(94, 53, 177),    # lila
+            QColor(109, 76, 65),    # braun
+        ]
+
+    def _color_for_frm_group(self, frm_group: QgsLayerTreeGroup) -> QColor:
+        """
+        Vergibt die Farbe anhand der Position des Betriebs innerhalb des Kunden.
+        Dadurch haben Geschwisterbetriebe unterschiedliche Farben.
+        """
+        palette = self._betrieb_palette()
+
+        if not isinstance(frm_group, QgsLayerTreeGroup):
+            return palette[0]
+
+        ctr_group = frm_group.parent()
+        if not isinstance(ctr_group, QgsLayerTreeGroup):
+            return palette[0]
+
+        farm_groups = [
+            ch for ch in ctr_group.children()
+            if isinstance(ch, QgsLayerTreeGroup)
+        ]
+
+        # stabil sortieren nach Name
+        farm_groups = sorted(farm_groups, key=lambda g: _norm_name(g.name()).lower())
+
+        for idx, grp in enumerate(farm_groups):
+            if grp == frm_group:
+                return palette[idx % len(palette)]
+
+        return palette[0]
+
+    def _apply_feldgrenzen_color(self, layer: QgsVectorLayer, frm_group: QgsLayerTreeGroup):
+        """
+        Überschreibt nur bei Feldgrenzen die Füllfarbe des Styles.
+        Die Farbe wird aus der Position des Betriebs innerhalb des Kunden vergeben.
+        """
+        if not layer or layer.name() != "Feldgrenzen":
+            return
+
+        try:
+            renderer = layer.renderer()
+            if renderer is None:
+                return
+
+            symbol = renderer.symbol()
+            if symbol is None:
+                return
+
+            fill_color = self._color_for_frm_group(frm_group)
+
+            for i in range(symbol.symbolLayerCount()):
+                sl = symbol.symbolLayer(i)
+                if hasattr(sl, "setFillColor"):
+                    sl.setFillColor(fill_color)
+
+            layer.triggerRepaint()
+
+            try:
+                self.iface.layerTreeView().refreshLayerSymbology(layer.id())
+            except Exception:
+                pass
+
+        except Exception as e:
+            self.iface.messageBar().pushMessage(
+                "Farb-Fehler",
+                f"Farbe für Feldgrenzen konnte nicht gesetzt werden: {e}",
+                level=Qgis.Warning,
+                duration=4
+            )
+    def _reorder_frm_group_layers(self, frm_group: QgsLayerTreeGroup):
+        """
+        Sortiert die Layer innerhalb einer Betriebsgruppe in die gewünschte Reihenfolge
+        im Layerbaum:
+
+        oben:
+            Punkthindernis
+            Flaechenhindernis
+            Fahrspuren
+            Feldgrenzen
+        unten
+
+        Dadurch wird Feldgrenzen zeichnerisch ganz unten dargestellt.
+        """
+        if not isinstance(frm_group, QgsLayerTreeGroup):
+            return
+
+        desired_order = [
+            "Punkthindernis",
+            "Flaechenhindernis",
+            "Fahrspuren",
+            "Feldgrenzen",
+        ]
+
+        layer_nodes = []
+        for ch in frm_group.children():
+            try:
+                lyr = ch.layer()
+            except Exception:
+                lyr = None
+            if isinstance(lyr, QgsVectorLayer):
+                layer_nodes.append((lyr.name(), ch))
+
+        name_to_node = {name: node for name, node in layer_nodes}
+
+        insert_pos = 0
+        for layer_name in desired_order:
+            node = name_to_node.get(layer_name)
+            if node is None:
+                continue
+            current_pos = frm_group.children().index(node)
+            if current_pos != insert_pos:
+                clone = node.clone()
+                frm_group.insertChildNode(insert_pos, clone)
+                frm_group.removeChildNode(node)
+            insert_pos += 1
+
     def add_action(self, icon_path, text, callback, parent=None):
         action = QAction(QIcon(icon_path) if icon_path else QIcon(), text, parent)
         action.triggered.connect(callback)
@@ -445,6 +644,19 @@ class LkTechnikPathPlanner:
             self.dlg.btn_add_frm.clicked.connect(self._ui_add_farm)
 
         self.dlg.refresh_tree()
+        root = QgsProject.instance().layerTreeRoot()
+        for node in root.findLayers():
+            lyr = node.layer()
+            if not isinstance(lyr, QgsVectorLayer):
+                continue
+
+            self._apply_predefined_style(lyr)
+
+            if lyr.name() == "Feldgrenzen":
+                parent = node.parent()
+                if isinstance(parent, QgsLayerTreeGroup):
+                    self._apply_feldgrenzen_color(lyr, parent)
+
         self.dlg.show()
         self.dlg.exec_()
 
@@ -541,6 +753,8 @@ class LkTechnikPathPlanner:
             lyr = _write_empty_layer_to_gpkg(mem, gpkg, "Feldgrenzen")
             project.addMapLayer(lyr, False)
             frm_group.addLayer(lyr)
+            self._apply_predefined_style(lyr)
+            self._apply_feldgrenzen_color(lyr, frm_group)
 
         # 2) Fahrspuren
         if "Fahrspuren" not in existing_names:
@@ -557,6 +771,7 @@ class LkTechnikPathPlanner:
             lyr = _write_empty_layer_to_gpkg(mem, gpkg, "Fahrspuren")
             project.addMapLayer(lyr, False)
             frm_group.addLayer(lyr)
+            self._apply_predefined_style(lyr)
 
         # 3) Punkthindernis
         if "Punkthindernis" not in existing_names:
@@ -573,6 +788,7 @@ class LkTechnikPathPlanner:
             lyr = _write_empty_layer_to_gpkg(mem, gpkg, "Punkthindernis")
             project.addMapLayer(lyr, False)
             frm_group.addLayer(lyr)
+            self._apply_predefined_style(lyr)
 
         # 4) Flaechenhindernis
         if "Flaechenhindernis" not in existing_names:
@@ -588,6 +804,8 @@ class LkTechnikPathPlanner:
             lyr = _write_empty_layer_to_gpkg(mem, gpkg, "Flaechenhindernis")
             project.addMapLayer(lyr, False)
             frm_group.addLayer(lyr)
+            self._apply_predefined_style(lyr)
+            self._reorder_frm_group_layers(frm_group)
 
     def _ui_add_customer(self):
         name, ok = QInputDialog.getText(self.iface.mainWindow(), "Kunde hinzufügen", "Kundenname:")
@@ -727,9 +945,14 @@ class LkTechnikPathPlanner:
             a_fields = QgsFields(); a_fields.append(QgsField("ID", QVariant.Int)); a_fields.append(QgsField("befahrbar", QVariant.Int))
             dp_area.addAttributes(a_fields); area_layer.updateFields()
 
+            self._apply_predefined_style(field_layer)
+            self._apply_predefined_style(line_layer)
+            self._apply_predefined_style(point_layer)
+            self._apply_predefined_style(area_layer)
+
             return {"Feldgrenzen": field_layer, "Fahrspuren": line_layer, "Punkthindernis": point_layer, "Flaechenhindernis": area_layer}
 
-        def _persist_frm_layers(layers_dict, ctr_name: str, frm_name: str):
+        def _persist_frm_layers(layers_dict, ctr_name: str, frm_name: str, frm_group: QgsLayerTreeGroup):
             if not out_dir:
                 return layers_dict
             base = os.path.join(out_dir, _safe(ctr_name), _safe(frm_name))
@@ -756,9 +979,14 @@ class LkTechnikPathPlanner:
                         parent.addLayer(file_layer)
                     else:
                         project.layerTreeRoot().addLayer(file_layer)
+
+                    self._apply_predefined_style(file_layer)
+                    if key == "Feldgrenzen":
+                        self._apply_feldgrenzen_color(file_layer, frm_group)
                     new_layers[key] = file_layer
                 else:
                     new_layers[key] = mem_layer
+            self._reorder_frm_group_layers(frm_group)        
             return new_layers
 
         def _ensure_frm(frm_id: str, ctr_name_hint: str = None):
@@ -786,8 +1014,11 @@ class LkTechnikPathPlanner:
             for lyr in layers.values():
                 project.addMapLayer(lyr, False)
                 frm_group.addLayer(lyr)
+            
+            self._apply_feldgrenzen_color(layers["Feldgrenzen"], frm_group)
+            self._reorder_frm_group_layers(frm_group)
 
-            layers = _persist_frm_layers(layers, ctr_name, frm_name)
+            layers = _persist_frm_layers(layers, ctr_name, frm_name, frm_group)
 
             per_frm_layers[key] = layers
             per_frm_groups[key] = frm_group
