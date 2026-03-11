@@ -899,7 +899,9 @@ class LkTechnikPathPlanner:
                                             gpn_element = ET.SubElement(ggp_element, 'GPN', {
                                                 'A': next_gpn_id(),
                                                 'B': track_feature['Name'],
-                                                'C': c_value
+                                                'C': c_value,
+                                                'E': '1',
+                                                'F': '1'
                                             })
 
                                             inner_lsg = ET.SubElement(gpn_element, 'LSG', {'A': '5'})
