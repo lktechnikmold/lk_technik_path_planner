@@ -1017,7 +1017,11 @@ class LkTechnikPathPlanner:
             pfd_area = pfd.get("D", "0")
             frm_ref = pfd.get("F") or pfd.get("FRMIdRef")
             try:
-                numeric_id = int(''.join(ch for ch in pfd_id if ch.isdigit()) or 0)
+                pfd_digits = ''.join(ch for ch in str(pfd_id) if ch.isdigit())
+                if len(pfd_digits) == 10:
+                    numeric_id = int(pfd_digits[-6:])
+                else:
+                    numeric_id = int(pfd_digits or 0)
             except Exception:
                 numeric_id = 0
             try:
@@ -1222,11 +1226,20 @@ class LkTechnikPathPlanner:
             "DataTransferOrigin": "1"
         })
 
-        ctr_idx = 1; frm_idx = 1; pnt_global = 1
+        ctr_idx = 1
+        frm_idx = 1
+        pnt_global = 1
         ggp_global = 1
         gpn_global = 1
 
+        CTR_WIDTH = 2
+        FRM_WIDTH = 2
+        FIELD_WIDTH = 6
+
         project = QgsProject.instance()
+
+        def _make_pfd_id(ctr_num: int, frm_num: int, field_id: int) -> str:
+            return f"PFD{ctr_num:0{CTR_WIDTH}d}{frm_num:0{FRM_WIDTH}d}{field_id:0{FIELD_WIDTH}d}"
         
         def next_ggp_id():
             nonlocal ggp_global
@@ -1268,14 +1281,26 @@ class LkTechnikPathPlanner:
             ctr_name = ctr_group.name()
             if ctr_name not in selected:
                 continue
-            ctr_id = f"CTR{ctr_idx}"; ctr_idx += 1
+
+            ctr_num = ctr_idx
+            ctr_id = f"CTR{ctr_idx}"
+            ctr_idx += 1
+
             ET.SubElement(root_xml, 'CTR', {'A': ctr_id, 'B': ctr_name})
+
+            frm_num_within_ctr = 1
 
             for frm_group in _iter_frm_groups(ctr_group):
                 frm_name = frm_group.name()
                 if frm_name not in selected[ctr_name]:
                     continue
-                frm_id = f"FRM{frm_idx}"; frm_idx += 1
+
+                frm_num = frm_num_within_ctr
+                frm_num_within_ctr += 1
+
+                frm_id = f"FRM{frm_idx}"
+                frm_idx += 1
+
                 ET.SubElement(root_xml, 'FRM', {'A': frm_id, 'B': frm_name, 'I': ctr_id})
 
                 polygon_layer = _find_child_layer_by_name(frm_group, "Feldgrenzen")
@@ -1327,8 +1352,14 @@ class LkTechnikPathPlanner:
                     field_name = field_feature[name_field] if name_field else str(field_feature.id())
                     field_area = field_feature[area_field] if area_field else 0
 
+                    pfd_unique_id = _make_pfd_id(ctr_num, frm_num, field_id)
+
                     pfd_element = ET.SubElement(root_xml, 'PFD', {
-                        'A': f'PFD{field_id}', 'C': str(field_name), 'D': str(int(field_area)), 'E': ctr_id, 'F': frm_id
+                        'A': pfd_unique_id,
+                        'C': str(field_name),
+                        'D': str(int(field_area)),
+                        'E': ctr_id,
+                        'F': frm_id
                     })
 
                     #Boundary
