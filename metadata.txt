@@ -9,8 +9,8 @@ category=Analysis
 icon=icons/logo.png
 license=GPL-3.0-or-later
 homepage=https://noe.lko.at
-repository=https://github.com/<ORG>/<REPO>
-tracker=https://github.com/<ORG>/<REPO>/issues
+repository=https://github.com/lktechnikmold/lk_technik_path_planner
+tracker=https://github.com/lktechnikmold/lk_technik_path_planner/issues
 description=Import und Export von ISOXML-Dateien für Lenksysteme
 about=Combined plugin for ISOXML import and export.
  Provides a structured selection tree (Customer -> Farm -> Fields) and supports ISOXML v3 and v4, including optional contour segments.
