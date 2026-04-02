@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import math
 import json
 import uuid
 import datetime
@@ -129,6 +130,18 @@ def export_john_deere_gen4(plugin, out_dir, selected):
             }
 
         return None
+    
+    def _heading_from_points(a_lon, a_lat, b_lon, b_lat):
+        """
+        Deere-Heading in Grad (0-360), aus A -> B.
+        Einfacher geografischer Richtungswinkel auf Basis lon/lat.
+        """
+        dx = b_lon - a_lon
+        dy = b_lat - a_lat
+        heading = math.degrees(math.atan2(dx, dy))
+        if heading < 0:
+            heading += 360.0
+        return heading
 
     def _write_boundary_geojson(path, geometry):
         data = {
@@ -206,6 +219,8 @@ def export_john_deere_gen4(plugin, out_dir, selected):
     })
 
     setup_el = ET.SubElement(root_xml, "{urn:schemas-johndeere-com:Setup}Setup")
+    guidance_el = ET.SubElement(setup_el, "{urn:schemas-johndeere-com:Setup}Guidance")
+    tracks_el = ET.SubElement(guidance_el, "{urn:schemas-johndeere-com:Setup}Tracks")
 
     exported_any = False
 
@@ -253,6 +268,7 @@ def export_john_deere_gen4(plugin, out_dir, selected):
             name_field = _pick_field(poly_fmap, "Name")
 
             field_ids_filter = selected[ctr_name][frm_name]
+            field_guid_map = {}
 
             for field_feature in polygon_layer.getFeatures():
                 raw_id = field_feature[id_field] if id_field else field_feature.id()
@@ -272,6 +288,7 @@ def export_john_deere_gen4(plugin, out_dir, selected):
 
                 boundary_guid = _new_guid()
                 field_guid = _new_guid()
+                field_guid_map[field_id] = field_guid
 
                 boundary_filename = f"Boundary{boundary_guid}.gjson"
                 boundary_path = os.path.join(spatial_dir, boundary_filename)
@@ -308,6 +325,108 @@ def export_john_deere_gen4(plugin, out_dir, selected):
                 path_el.text = "./SpatialFiles/"
 
                 exported_any = True
+            
+            line_layer = _find_child_layer_by_name(frm_group, "Fahrspuren")
+            if line_layer:
+                ct_line = _to_wgs84_transform(line_layer)
+                line_fmap = _field_map(line_layer)
+                line_id_field = _pick_field(line_fmap, "ID")
+                line_name_field = _pick_field(line_fmap, "Name")
+
+                for track_feature in line_layer.getFeatures():
+                    if line_id_field is None:
+                        continue
+
+                    raw_track_id = track_feature[line_id_field]
+                    try:
+                        track_field_id = int(raw_track_id)
+                    except Exception:
+                        continue
+
+                    # nur exportierte Felder berücksichtigen
+                    field_guid_for_track = field_guid_map.get(track_field_id)
+                    if not field_guid_for_track:
+                        continue
+
+                    track_name = (
+                        str(track_feature[line_name_field]).strip()
+                        if line_name_field else "AB Line"
+                    )
+                    if not track_name:
+                        track_name = "AB Line"
+
+                    geom = track_feature.geometry()
+                    if geom is None or geom.isEmpty():
+                        continue
+
+                    lines = geom.asMultiPolyline() or []
+                    if not lines:
+                        single = geom.asPolyline()
+                        if single:
+                            lines = [single]
+
+                    # Für den ersten Schritt nur echte AB-Linien:
+                    # genau eine Linie mit genau 2 Punkten
+                    if len(lines) != 1:
+                        continue
+
+                    line = lines[0]
+                    if len(line) != 2:
+                        continue
+
+                    a_lon, a_lat = _pt_to_lonlat(line[0], ct_line)
+                    b_lon, b_lat = _pt_to_lonlat(line[1], ct_line)
+
+                    heading = _heading_from_points(a_lon, a_lat, b_lon, b_lat)
+                    track_guid = _new_guid()
+
+                    ab_el = ET.SubElement(tracks_el, "{urn:schemas-johndeere-com:Setup}ABLine", {
+                        "CreationDate": timestamp,
+                        "SourceNode": source_node_guid,
+                        "LastModifiedDate": timestamp,
+                        "Archived": "false",
+                        "StringGuid": track_guid,
+                        "Name": track_name,
+                        "TaggedEntity": field_guid_for_track
+                    })
+
+                    tram_el = ET.SubElement(ab_el, "{urn:schemas-johndeere-com:Setup}TramLineAttributes")
+                    ET.SubElement(tram_el, "{urn:schemas-johndeere-com:Setup}TrackOffset").text = "0"
+                    ET.SubElement(tram_el, "{urn:schemas-johndeere-com:Setup}Spacing").text = "0"
+
+                    proj_el = ET.SubElement(ab_el, "{urn:schemas-johndeere-com:Setup}SpatialProjection")
+                    ET.SubElement(proj_el, "{urn:schemas-johndeere-com:Setup}ProjectionType", {
+                        "Representation": "dtProjectionType",
+                        "Value": "dtiProjectionDeere"
+                    })
+                    ET.SubElement(proj_el, "{urn:schemas-johndeere-com:Setup}ElevationReferencePoint", {
+                        "Representation": "vrElevation",
+                        "Value": "0",
+                        "SourceUnit": "m"
+                    })
+
+                    ET.SubElement(ab_el, "{urn:schemas-johndeere-com:Setup}APoint", {
+                        "Latitude": str(a_lat),
+                        "Longitude": str(a_lon),
+                        "Slope": "0"
+                    })
+
+                    ET.SubElement(ab_el, "{urn:schemas-johndeere-com:Setup}BPoint", {
+                        "Latitude": str(b_lat),
+                        "Longitude": str(b_lon),
+                        "Slope": "0"
+                    })
+
+                    ET.SubElement(ab_el, "{urn:schemas-johndeere-com:Setup}SaveMethod", {
+                        "Representation": "dtABLineSaveMethod",
+                        "Value": "dtiABLineMethodBPoint"
+                    })
+
+                    ET.SubElement(ab_el, "{urn:schemas-johndeere-com:Setup}Heading", {
+                        "Representation": "vrABLineHeading",
+                        "Value": str(heading),
+                        "SourceUnit": "arcdeg"
+                    })
 
     # -------------------------------------------------
     # XML schreiben
