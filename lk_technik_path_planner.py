@@ -51,6 +51,10 @@ from qgis.PyQt.QtWidgets import (
     QPushButton, QLineEdit, QLabel, QGroupBox, QCheckBox, QRadioButton, QStackedWidget,
     QFormLayout, QInputDialog, QMessageBox
 )
+try:
+    from .john_deere_gen4_export import export_john_deere_gen4
+except Exception:
+    from john_deere_gen4_export import export_john_deere_gen4
 
 from qgis.core import (
     Qgis, QgsProject, QgsVectorLayer, QgsField, QgsFields, QgsFeature, QgsGeometry, QgsPointXY,
@@ -159,28 +163,56 @@ class ToolboxDialog(QDialog):
         btn = QPushButton("…")
         def _pick_file():
             dn = QFileDialog.getExistingDirectory(
-                self, "Zielordner für ISOXML wählen"
+                self, "Zielordner für Export wählen"
             )
             if dn:
                 self.out_line.setText(dn)
 
         btn.clicked.connect(_pick_file)
-        path_row.addWidget(QLabel("TASKDATA.XML:"))
+        path_row.addWidget(QLabel("Zielordner:"))
         path_row.addWidget(self.out_line, 1)
         path_row.addWidget(btn)
         v.addLayout(path_row)
 
-        # v3/segments options
+        # Exportformat / Segment-Optionen
         opt_row = QHBoxLayout()
         self.chk_v3 = QCheckBox("ISOXML v3 (sonst v4)")
+        self.chk_jd_gen4 = QCheckBox("John Deere Gen4")
         self.chk_seg = QCheckBox("Kontursegmente (nur v4)")
-        def _toggle_v3():
-            self.chk_seg.setEnabled(not self.chk_v3.isChecked())
-            if self.chk_v3.isChecked():
+
+        def _toggle_export_mode():
+            """
+            Regeln:
+            - ISOXML v3 und John Deere Gen4 schließen sich gegenseitig aus
+            - Kontursegmente nur bei ISOXML v4 erlauben
+            - bei v3 oder John Deere: Kontursegmente deaktivieren + abhaken
+            """
+
+            sender = self.sender()
+
+            # gegenseitiger Ausschluss
+            if sender == self.chk_v3 and self.chk_v3.isChecked():
+                self.chk_jd_gen4.blockSignals(True)
+                self.chk_jd_gen4.setChecked(False)
+                self.chk_jd_gen4.blockSignals(False)
+
+            elif sender == self.chk_jd_gen4 and self.chk_jd_gen4.isChecked():
+                self.chk_v3.blockSignals(True)
+                self.chk_v3.setChecked(False)
+                self.chk_v3.blockSignals(False)
+
+            disable_segments = self.chk_v3.isChecked() or self.chk_jd_gen4.isChecked()
+            self.chk_seg.setEnabled(not disable_segments)
+
+            if disable_segments:
                 self.chk_seg.setChecked(False)
-        self.chk_v3.toggled.connect(_toggle_v3)
-        _toggle_v3()
+
+        self.chk_v3.toggled.connect(_toggle_export_mode)
+        self.chk_jd_gen4.toggled.connect(_toggle_export_mode)
+        _toggle_export_mode()
+
         opt_row.addWidget(self.chk_v3)
+        opt_row.addWidget(self.chk_jd_gen4)
         opt_row.addWidget(self.chk_seg)
         opt_row.addStretch(1)
         v.addLayout(opt_row)
@@ -1201,6 +1233,10 @@ class LkTechnikPathPlanner:
 
 
         out_dir = self.dlg.out_line.text().strip()
+        is_john_deere = self.dlg.chk_jd_gen4.isChecked()
+        is_v3 = self.dlg.chk_v3.isChecked()
+        use_segments = (self.dlg.chk_seg.isChecked() and not is_v3 and not is_john_deere)
+
         if not out_dir:
             self.iface.messageBar().pushMessage(
                 "Fehler", "Bitte Zielordner wählen.",
@@ -1208,15 +1244,36 @@ class LkTechnikPathPlanner:
             )
             return
 
-        output_file_path = os.path.join(out_dir, "TASKDATA.XML")
-
-        is_v3 = self.dlg.chk_v3.isChecked()
-        use_segments = (self.dlg.chk_seg.isChecked() and not is_v3)
-
         selected = self.dlg.selected_export_map()
         if not selected:
-            self.iface.messageBar().pushMessage("Hinweis", "Keine Auswahl getroffen.", level=Qgis.Info, duration=4)
+            self.iface.messageBar().pushMessage(
+                "Hinweis", "Keine Auswahl getroffen.",
+                level=Qgis.Info, duration=4
+            )
             return
+
+        if is_john_deere:
+            try:
+                ok = export_john_deere_gen4(self, out_dir, selected)
+                if ok:
+                    self.iface.messageBar().pushMessage(
+                        "Erfolgreich",
+                        f"John Deere Gen4 Export erstellt: {out_dir}",
+                        level=Qgis.Success,
+                        duration=4
+                    )
+                    self.dlg.accept()
+                return
+            except Exception as e:
+                self.iface.messageBar().pushMessage(
+                    "Fehler",
+                    f"John Deere Gen4 Export fehlgeschlagen: {e}",
+                    level=Qgis.Critical,
+                    duration=6
+                )
+                return
+
+        output_file_path = os.path.join(out_dir, "TASKDATA.XML")
 
         root_xml = ET.Element('ISO11783_TaskData', {
             "VersionMajor": "3" if is_v3 else "4",
