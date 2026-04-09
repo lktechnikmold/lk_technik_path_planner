@@ -168,6 +168,32 @@ def export_john_deere_gen4(plugin, out_dir, selected):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
+    def _write_abcurve_geojson(path, line_points_lonlat):
+        coords = []
+        for pt in line_points_lonlat:
+            lon = pt[0]
+            lat = pt[1]
+            coords.append([lon, lat, 0, 0])
+
+        data = {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "properties": {
+                        "curvetype": "Track0"
+                    },
+                    "geometry": {
+                        "type": "MultiLineString",
+                        "coordinates": [coords]
+                    }
+                }
+            ]
+        }
+
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+
     # -------------------------------------------------
     # Ordnerstruktur
     # -------------------------------------------------
@@ -219,10 +245,10 @@ def export_john_deere_gen4(plugin, out_dir, selected):
     })
 
     setup_el = ET.SubElement(root_xml, "{urn:schemas-johndeere-com:Setup}Setup")
-    guidance_el = ET.SubElement(setup_el, "{urn:schemas-johndeere-com:Setup}Guidance")
-    tracks_el = ET.SubElement(guidance_el, "{urn:schemas-johndeere-com:Setup}Tracks")
 
     exported_any = False
+    abcurve_defs = []
+    abline_defs = []
 
     for ctr_group in _iter_ctr_groups():
         ctr_name = ctr_group.name()
@@ -365,68 +391,160 @@ def export_john_deere_gen4(plugin, out_dir, selected):
                         if single:
                             lines = [single]
 
-                    # Für den ersten Schritt nur echte AB-Linien:
-                    # genau eine Linie mit genau 2 Punkten
                     if len(lines) != 1:
                         continue
 
                     line = lines[0]
-                    if len(line) != 2:
+                    if len(line) < 2:
                         continue
 
-                    a_lon, a_lat = _pt_to_lonlat(line[0], ct_line)
-                    b_lon, b_lat = _pt_to_lonlat(line[1], ct_line)
+                    # Alle Punkte in WGS84 umrechnen
+                    line_lonlat = [_pt_to_lonlat(pt, ct_line) for pt in line]
 
+                    a_lon, a_lat = line_lonlat[0]
+                    b_lon, b_lat = line_lonlat[1]
                     heading = _heading_from_points(a_lon, a_lat, b_lon, b_lat)
                     track_guid = _new_guid()
 
-                    ab_el = ET.SubElement(tracks_el, "{urn:schemas-johndeere-com:Setup}ABLine", {
-                        "CreationDate": timestamp,
-                        "SourceNode": source_node_guid,
-                        "LastModifiedDate": timestamp,
-                        "Archived": "false",
-                        "StringGuid": track_guid,
-                        "Name": track_name,
-                        "TaggedEntity": field_guid_for_track
-                    })
+                    # -------------------------------------------------
+                    # ABLine = genau 2 Punkte
+                    # -------------------------------------------------
+                    if len(line) == 2:
+                        abline_defs.append({
+                            "type": "ABLine",
+                            "CreationDate": timestamp,
+                            "SourceNode": source_node_guid,
+                            "LastModifiedDate": timestamp,
+                            "Archived": "false",
+                            "StringGuid": track_guid,
+                            "Name": track_name,
+                            "TaggedEntity": field_guid_for_track,
+                            "APoint": {"Latitude": str(a_lat), "Longitude": str(a_lon), "Slope": "0"},
+                            "BPoint": {"Latitude": str(b_lat), "Longitude": str(b_lon), "Slope": "0"},
+                            "Heading": str(heading)
+                        })
 
-                    tram_el = ET.SubElement(ab_el, "{urn:schemas-johndeere-com:Setup}TramLineAttributes")
-                    ET.SubElement(tram_el, "{urn:schemas-johndeere-com:Setup}TrackOffset").text = "0"
-                    ET.SubElement(tram_el, "{urn:schemas-johndeere-com:Setup}Spacing").text = "0"
+                    # -------------------------------------------------
+                    # ABCurve = mehr als 2 Punkte
+                    # -------------------------------------------------
+                    else:
+                        curve_filename = f"AbCurve{track_guid}.gjson"
+                        curve_path = os.path.join(spatial_dir, curve_filename)
+                        _write_abcurve_geojson(curve_path, line_lonlat)
 
-                    proj_el = ET.SubElement(ab_el, "{urn:schemas-johndeere-com:Setup}SpatialProjection")
-                    ET.SubElement(proj_el, "{urn:schemas-johndeere-com:Setup}ProjectionType", {
-                        "Representation": "dtProjectionType",
-                        "Value": "dtiProjectionDeere"
-                    })
-                    ET.SubElement(proj_el, "{urn:schemas-johndeere-com:Setup}ElevationReferencePoint", {
-                        "Representation": "vrElevation",
-                        "Value": "0",
-                        "SourceUnit": "m"
-                    })
+                        abcurve_defs.append({
+                            "type": "ABCurve",
+                            "CreationDate": timestamp,
+                            "SourceNode": source_node_guid,
+                            "LastModifiedDate": timestamp,
+                            "Archived": "false",
+                            "StringGuid": track_guid,
+                            "Name": track_name,
+                            "TaggedEntity": field_guid_for_track,
+                            "FilenameWithExtension": curve_filename,
+                            "Path": "./SpatialFiles/",
+                            "APoint": {"Latitude": str(a_lat), "Longitude": str(a_lon), "Slope": "0"},
+                            "BPoint": {"Latitude": str(b_lat), "Longitude": str(b_lon), "Slope": "0"},
+                            "Heading": str(heading)
+                        })
+    # -------------------------------------------------
+    # Guidance erst am Ende schreiben
+    # -------------------------------------------------
+    if abcurve_defs or abline_defs:
+        guidance_el = ET.SubElement(setup_el, "{urn:schemas-johndeere-com:Setup}Guidance")
+        tracks_el = ET.SubElement(guidance_el, "{urn:schemas-johndeere-com:Setup}Tracks")
 
-                    ET.SubElement(ab_el, "{urn:schemas-johndeere-com:Setup}APoint", {
-                        "Latitude": str(a_lat),
-                        "Longitude": str(a_lon),
-                        "Slope": "0"
-                    })
+        # ZUERST ABCurves
+        for td in abcurve_defs:
+            curve_el = ET.SubElement(tracks_el, "{urn:schemas-johndeere-com:Setup}ABCurve", {
+                "CreationDate": td["CreationDate"],
+                "SourceNode": td["SourceNode"],
+                "LastModifiedDate": td["LastModifiedDate"],
+                "Archived": td["Archived"],
+                "StringGuid": td["StringGuid"],
+                "Name": td["Name"],
+                "TaggedEntity": td["TaggedEntity"]
+            })
 
-                    ET.SubElement(ab_el, "{urn:schemas-johndeere-com:Setup}BPoint", {
-                        "Latitude": str(b_lat),
-                        "Longitude": str(b_lon),
-                        "Slope": "0"
-                    })
+            ET.SubElement(curve_el, "{urn:schemas-johndeere-com:Setup}SignalType", {
+                "Representation": "dtSignalType",
+                "Value": "dtiSignalTypeUnknown"
+            })
 
-                    ET.SubElement(ab_el, "{urn:schemas-johndeere-com:Setup}SaveMethod", {
-                        "Representation": "dtABLineSaveMethod",
-                        "Value": "dtiABLineMethodBPoint"
-                    })
+            geometry_el = ET.SubElement(curve_el, "{urn:schemas-johndeere-com:Setup}Geometry")
+            ET.SubElement(
+                geometry_el,
+                "{urn:schemas-johndeere-com:Setup}FilenameWithExtension"
+            ).text = td["FilenameWithExtension"]
+            ET.SubElement(
+                geometry_el,
+                "{urn:schemas-johndeere-com:Setup}Path"
+            ).text = td["Path"]
 
-                    ET.SubElement(ab_el, "{urn:schemas-johndeere-com:Setup}Heading", {
-                        "Representation": "vrABLineHeading",
-                        "Value": str(heading),
-                        "SourceUnit": "arcdeg"
-                    })
+            tram_el = ET.SubElement(curve_el, "{urn:schemas-johndeere-com:Setup}TramLineAttributes")
+            ET.SubElement(tram_el, "{urn:schemas-johndeere-com:Setup}TrackOffset").text = "0"
+            ET.SubElement(tram_el, "{urn:schemas-johndeere-com:Setup}Spacing").text = "1"
+
+            proj_el = ET.SubElement(curve_el, "{urn:schemas-johndeere-com:Setup}SpatialProjection")
+            ET.SubElement(proj_el, "{urn:schemas-johndeere-com:Setup}ProjectionType", {
+                "Representation": "dtProjectionType",
+                "Value": "dtiProjectionDeere"
+            })
+            ET.SubElement(proj_el, "{urn:schemas-johndeere-com:Setup}ElevationReferencePoint", {
+                "Representation": "vrElevation",
+                "Value": "0",
+                "SourceUnit": "m"
+            })
+
+            ET.SubElement(curve_el, "{urn:schemas-johndeere-com:Setup}APoint", td["APoint"])
+            ET.SubElement(curve_el, "{urn:schemas-johndeere-com:Setup}BPoint", td["BPoint"])
+
+            ET.SubElement(curve_el, "{urn:schemas-johndeere-com:Setup}Heading", {
+                "Representation": "vrHeading",
+                "Value": td["Heading"],
+                "SourceUnit": "arcdeg"
+            })
+
+        # DANACH ABLines
+        for td in abline_defs:
+            ab_el = ET.SubElement(tracks_el, "{urn:schemas-johndeere-com:Setup}ABLine", {
+                "CreationDate": td["CreationDate"],
+                "SourceNode": td["SourceNode"],
+                "LastModifiedDate": td["LastModifiedDate"],
+                "Archived": td["Archived"],
+                "StringGuid": td["StringGuid"],
+                "Name": td["Name"],
+                "TaggedEntity": td["TaggedEntity"]
+            })
+
+            tram_el = ET.SubElement(ab_el, "{urn:schemas-johndeere-com:Setup}TramLineAttributes")
+            ET.SubElement(tram_el, "{urn:schemas-johndeere-com:Setup}TrackOffset").text = "0"
+            ET.SubElement(tram_el, "{urn:schemas-johndeere-com:Setup}Spacing").text = "0"
+
+            proj_el = ET.SubElement(ab_el, "{urn:schemas-johndeere-com:Setup}SpatialProjection")
+            ET.SubElement(proj_el, "{urn:schemas-johndeere-com:Setup}ProjectionType", {
+                "Representation": "dtProjectionType",
+                "Value": "dtiProjectionDeere"
+            })
+            ET.SubElement(proj_el, "{urn:schemas-johndeere-com:Setup}ElevationReferencePoint", {
+                "Representation": "vrElevation",
+                "Value": "0",
+                "SourceUnit": "m"
+            })
+
+            ET.SubElement(ab_el, "{urn:schemas-johndeere-com:Setup}APoint", td["APoint"])
+            ET.SubElement(ab_el, "{urn:schemas-johndeere-com:Setup}BPoint", td["BPoint"])
+
+            ET.SubElement(ab_el, "{urn:schemas-johndeere-com:Setup}SaveMethod", {
+                "Representation": "dtABLineSaveMethod",
+                "Value": "dtiABLineMethodAutomaticB"
+            })
+
+            ET.SubElement(ab_el, "{urn:schemas-johndeere-com:Setup}Heading", {
+                "Representation": "vrABLineHeading",
+                "Value": td["Heading"],
+                "SourceUnit": "arcdeg"
+            })
 
     # -------------------------------------------------
     # XML schreiben
