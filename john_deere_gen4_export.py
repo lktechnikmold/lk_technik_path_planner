@@ -193,6 +193,43 @@ def export_john_deere_gen4(plugin, out_dir, selected):
 
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+    
+    def _write_flag_geojson(path, lon, lat):
+        data = {
+            "geometry": {
+                "coordinates": [lon, lat],
+                "type": "Point"
+            },
+            "type": "Feature"
+        }
+
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+    
+    def _write_area_flag_geojson(path, geometry):
+        data = {
+            "type": "Feature",
+            "geometry": geometry
+        }
+
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+    
+    def _ensure_flag_category(name, active):
+        key = name.strip().lower()
+        if key not in flag_category_defs:
+            flag_category_defs[key] = {
+                "CreationDate": timestamp,
+                "SourceNode": source_node_guid,
+                "LastModifiedDate": timestamp,
+                "Archived": "false",
+                "StringGuid": _new_guid(),
+                "Name": name.strip(),
+                "IsReferenceData": "true",
+                "BackgroundColor": "#FFFFFF",
+                "Active": "true" if active else "false"
+            }
+        return flag_category_defs[key]["StringGuid"]
 
     # -------------------------------------------------
     # Ordnerstruktur
@@ -249,6 +286,11 @@ def export_john_deere_gen4(plugin, out_dir, selected):
     exported_any = False
     abcurve_defs = []
     abline_defs = []
+    flag_category_defs = {}
+    flag_defs = []
+
+    flag_category_guid_befahrbar = _ensure_flag_category("Hindernis befahrbar", False)
+    flag_category_guid_nicht_befahrbar = _ensure_flag_category("Hindernis nicht befahrbar", True)
 
     for ctr_group in _iter_ctr_groups():
         ctr_name = ctr_group.name()
@@ -283,6 +325,7 @@ def export_john_deere_gen4(plugin, out_dir, selected):
                 "Client": client_guid
             })
 
+            
             polygon_layer = _find_child_layer_by_name(frm_group, "Feldgrenzen")
             if not polygon_layer:
                 continue
@@ -315,6 +358,8 @@ def export_john_deere_gen4(plugin, out_dir, selected):
                 boundary_guid = _new_guid()
                 field_guid = _new_guid()
                 field_guid_map[field_id] = field_guid
+
+                
 
                 boundary_filename = f"Boundary{boundary_guid}.gjson"
                 boundary_path = os.path.join(spatial_dir, boundary_filename)
@@ -351,7 +396,132 @@ def export_john_deere_gen4(plugin, out_dir, selected):
                 path_el.text = "./SpatialFiles/"
 
                 exported_any = True
-            
+
+            point_layer = _find_child_layer_by_name(frm_group, "Punkthindernis")
+            if point_layer:
+                ct_point = _to_wgs84_transform(point_layer)
+                point_fmap = _field_map(point_layer)
+
+                point_id_field = _pick_field(point_fmap, "ID")
+                point_name_field = _pick_field(point_fmap, "Name")
+                point_befahrbar_field = _pick_field(point_fmap, "befahrbar")
+
+                for point_feature in point_layer.getFeatures():
+                    if point_id_field is None:
+                        continue
+
+                    raw_point_id = point_feature[point_id_field]
+                    try:
+                        point_field_id = int(raw_point_id)
+                    except Exception:
+                        continue
+
+                    field_guid_for_flag = field_guid_map.get(point_field_id)
+                    if not field_guid_for_flag:
+                        continue
+
+                    flag_name = (
+                        str(point_feature[point_name_field]).strip()
+                        if point_name_field else "Punkthindernis"
+                    )
+                    if not flag_name:
+                        flag_name = "Punkthindernis"
+
+                    befahrbar_val = 0
+                    if point_befahrbar_field:
+                        try:
+                            befahrbar_val = int(point_feature[point_befahrbar_field])
+                        except Exception:
+                            befahrbar_val = 0
+
+                    # Kategorie je nach Befahrbarkeit
+                    if befahrbar_val == 1:
+                        category_guid = flag_category_guid_befahrbar
+                    else:
+                        category_guid = flag_category_guid_nicht_befahrbar
+
+                    geom = point_feature.geometry()
+                    if geom is None or geom.isEmpty():
+                        continue
+
+                    pt = geom.asPoint()
+                    lon, lat = _pt_to_lonlat(pt, ct_point)
+
+                    flag_guid = _new_guid()
+                    flag_filename = f"Flag{flag_guid}.gjson"
+                    flag_path = os.path.join(spatial_dir, flag_filename)
+                    _write_flag_geojson(flag_path, lon, lat)
+
+                    flag_defs.append({
+                        "CreationDate": timestamp,
+                        "SourceNode": source_node_guid,
+                        "LastModifiedDate": timestamp,
+                        "Archived": "false",
+                        "StringGuid": flag_guid,
+                        "TaggedEntity": field_guid_for_flag,
+                        "FlagCategory": category_guid,
+                        "Name": flag_name,
+                        "FilenameWithExtension": flag_filename,
+                        "Path": "./SpatialFiles/"
+                    })
+            area_layer = _find_child_layer_by_name(frm_group, "Flaechenhindernis")
+            if area_layer:
+                ct_area = _to_wgs84_transform(area_layer)
+                area_fmap = _field_map(area_layer)
+
+                area_id_field = _pick_field(area_fmap, "ID")
+                area_befahrbar_field = _pick_field(area_fmap, "befahrbar")
+
+                for area_feature in area_layer.getFeatures():
+                    if area_id_field is None:
+                        continue
+
+                    raw_area_id = area_feature[area_id_field]
+                    try:
+                        area_field_id = int(raw_area_id)
+                    except Exception:
+                        continue
+
+                    field_guid_for_flag = field_guid_map.get(area_field_id)
+                    if not field_guid_for_flag:
+                        continue
+
+                    befahrbar_val = 0
+                    if area_befahrbar_field:
+                        try:
+                            befahrbar_val = int(area_feature[area_befahrbar_field])
+                        except Exception:
+                            befahrbar_val = 0
+
+                    if befahrbar_val == 1:
+                        category_guid = flag_category_guid_befahrbar
+                        flag_name = "befahrbares Hindernis"
+                    else:
+                        category_guid = flag_category_guid_nicht_befahrbar
+                        flag_name = "nicht befahrbares Hindernis"
+
+                    area_geom = _polygon_feature_to_geojson_geometry(area_feature, ct_area)
+                    if area_geom is None:
+                        continue
+
+                    flag_guid = _new_guid()
+                    flag_filename = f"Flag{flag_guid}.gjson"
+                    flag_path = os.path.join(spatial_dir, flag_filename)
+                    _write_area_flag_geojson(flag_path, area_geom)
+
+                    flag_defs.append({
+                        "CreationDate": timestamp,
+                        "SourceNode": source_node_guid,
+                        "LastModifiedDate": timestamp,
+                        "Archived": "false",
+                        "StringGuid": flag_guid,
+                        "TaggedEntity": field_guid_for_flag,
+                        "FlagCategory": category_guid,
+                        "Name": flag_name,
+                        "FilenameWithExtension": flag_filename,
+                        "Path": "./SpatialFiles/"
+                    })
+
             line_layer = _find_child_layer_by_name(frm_group, "Fahrspuren")
             if line_layer:
                 ct_line = _to_wgs84_transform(line_layer)
@@ -447,6 +617,48 @@ def export_john_deere_gen4(plugin, out_dir, selected):
                             "BPoint": {"Latitude": str(b_lat), "Longitude": str(b_lon), "Slope": "0"},
                             "Heading": str(heading)
                         })
+    # -------------------------------------------------
+    # FlagCategories schreiben
+    # -------------------------------------------------
+    for fc in flag_category_defs.values():
+        fc_el = ET.SubElement(setup_el, "{urn:schemas-johndeere-com:Setup}FlagCategory", {
+            "CreationDate": fc["CreationDate"],
+            "SourceNode": fc["SourceNode"],
+            "LastModifiedDate": fc["LastModifiedDate"],
+            "Archived": fc["Archived"],
+            "StringGuid": fc["StringGuid"],
+            "Name": fc["Name"],
+            "IsReferenceData": fc["IsReferenceData"],
+            "BackgroundColor": fc["BackgroundColor"]
+        })
+
+        alert_el = ET.SubElement(fc_el, "{urn:schemas-johndeere-com:Setup}AlertPreferences")
+        ET.SubElement(alert_el, "{urn:schemas-johndeere-com:Setup}Active").text = fc["Active"]
+
+    # -------------------------------------------------
+    # Flags schreiben
+    # -------------------------------------------------
+    for fd in flag_defs:
+        flag_el = ET.SubElement(setup_el, "{urn:schemas-johndeere-com:Setup}Flag", {
+            "CreationDate": fd["CreationDate"],
+            "SourceNode": fd["SourceNode"],
+            "LastModifiedDate": fd["LastModifiedDate"],
+            "Archived": fd["Archived"],
+            "StringGuid": fd["StringGuid"],
+            "TaggedEntity": fd["TaggedEntity"],
+            "FlagCategory": fd["FlagCategory"],
+            "Name": fd["Name"]
+        })
+
+        geometry_el = ET.SubElement(flag_el, "{urn:schemas-johndeere-com:Setup}Geometry")
+        ET.SubElement(
+            geometry_el,
+            "{urn:schemas-johndeere-com:Setup}FilenameWithExtension"
+        ).text = fd["FilenameWithExtension"]
+        ET.SubElement(
+            geometry_el,
+            "{urn:schemas-johndeere-com:Setup}Path"
+        ).text = fd["Path"]
     # -------------------------------------------------
     # Guidance erst am Ende schreiben
     # -------------------------------------------------
