@@ -56,6 +56,11 @@ try:
 except Exception:
     from john_deere_gen4_export import export_john_deere_gen4
 
+try:
+    from .john_deere_gen4_import import import_john_deere_gen4
+except Exception:
+    from john_deere_gen4_import import import_john_deere_gen4
+
 from qgis.core import (
     Qgis, QgsProject, QgsVectorLayer, QgsField, QgsFields, QgsFeature, QgsGeometry, QgsPointXY,
     QgsLayerTreeGroup, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsVectorFileWriter
@@ -241,15 +246,37 @@ class ToolboxDialog(QDialog):
         lay = QFormLayout(w)
 
         self.in_line = QLineEdit()
-        btn_in = QPushButton("…")
-        def _pick_in():
-            fn, _ = QFileDialog.getOpenFileName(self, "ISOXML wählen", '', 'XML (*.xml);;Alle Dateien (*)')
+
+        btn_file = QPushButton("Datei…")
+        btn_folder = QPushButton("Ordner…")
+
+        def _pick_in_file():
+            fn, _ = QFileDialog.getOpenFileName(
+                self,
+                "TASKDATA.XML oder MasterData.xml wählen",
+                '',
+                'XML (*.xml);;Alle Dateien (*)'
+            )
             if fn:
                 self.in_line.setText(fn)
-        btn_in.clicked.connect(_pick_in)
-        h1 = QHBoxLayout(); h1.addWidget(self.in_line, 1); h1.addWidget(btn_in)
-        lay.addRow(QLabel("TASKDATA.XML:"), h1)
 
+        def _pick_in_folder():
+            dn = QFileDialog.getExistingDirectory(
+                self,
+                "John Deere Gen4 Ordner wählen"
+            )
+            if dn:
+                self.in_line.setText(dn)
+
+        btn_file.clicked.connect(_pick_in_file)
+        btn_folder.clicked.connect(_pick_in_folder)
+
+        h1 = QHBoxLayout()
+        h1.addWidget(self.in_line, 1)
+        h1.addWidget(btn_file)
+        h1.addWidget(btn_folder)
+
+        lay.addRow(QLabel("TASKDATA.XML oder Gen4-Ordner:"), h1)
         self.out_dir_line = QLineEdit()
         btn_dir = QPushButton("…")
         def _pick_dir():
@@ -891,6 +918,51 @@ class LkTechnikPathPlanner:
     def _do_import(self):
         path = self.dlg.in_line.text().strip()
         out_dir = self.dlg.out_dir_line.text().strip() or None
+
+        if not path:
+            self.iface.messageBar().pushMessage(
+                "Fehler",
+                "Keine Datei oder kein Ordner gewählt.",
+                level=Qgis.Warning,
+                duration=4
+            )
+            return
+
+        # John Deere Gen4 erkennen:
+        # 1) Ordner gewählt -> direkt prüfen
+        # 2) MasterData.xml gewählt -> Ordner darüber nehmen
+        if os.path.isdir(path):
+            gen4_master = os.path.join(path, "MasterData.xml")
+            isoxml_taskdata = os.path.join(path, "TASKDATA.XML")
+
+            # 1) John Deere Gen4
+            if os.path.exists(gen4_master):
+                ok = import_john_deere_gen4(self, path, out_dir)
+                if ok:
+                    self.dlg.accept()
+                return
+
+            # 2) Klassisches ISOXML
+            if os.path.exists(isoxml_taskdata):
+                path = isoxml_taskdata
+            else:
+                self.iface.messageBar().pushMessage(
+                    "Fehler",
+                    "Im gewählten Ordner wurde weder eine MasterData.xml noch eine TASKDATA.XML gefunden.",
+                    level=Qgis.Warning,
+                    duration=5
+                )
+                return
+
+        elif os.path.isfile(path):
+            base = os.path.basename(path).lower()
+            if base == "masterdata.xml":
+                gen4_dir = os.path.dirname(path)
+                ok = import_john_deere_gen4(self, gen4_dir, out_dir)
+                if ok:
+                    self.dlg.accept()
+                return
+
         if not path:
             self.iface.messageBar().pushMessage("Fehler", "Keine ISOXML-Datei gewählt.", level=Qgis.Warning, duration=4)
             return
