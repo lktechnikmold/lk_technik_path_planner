@@ -3,8 +3,8 @@
 LK-Technik Path Planner – combined QGIS Plugin (Import & Export)
 
 Dieses Plugin vereint Import und Export von ISOXML-Daten:
-- Import (ISOXML → QGIS)
-- Export (QGIS → ISOXML)
+- Import (ISOXML/Gen4 → QGIS)
+- Export (QGIS → ISOXML/Gen4)
 
 Entwickelt für QGIS 3.x
 
@@ -33,8 +33,8 @@ Copyright- und Autorhinweise (Florian Köck, LK-Technik Mold) erhalten bleiben.
 
 Author: Florian Köck
 Institution: LK-Technik Mold
-Version: 1.0.0
-Date: 2025-11-04
+Version: 1.1.8
+Date: 2026-04-13
 """
 
 
@@ -49,7 +49,7 @@ except Exception:
 from qgis.PyQt.QtWidgets import (
     QAction, QDialog, QFileDialog, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem,
     QPushButton, QLineEdit, QLabel, QGroupBox, QCheckBox, QRadioButton, QStackedWidget,
-    QFormLayout, QInputDialog, QMessageBox
+    QFormLayout, QInputDialog, QMessageBox, QWidget, QToolButton, QDoubleSpinBox
 )
 try:
     from .john_deere_gen4_export import export_john_deere_gen4
@@ -116,8 +116,8 @@ class ToolboxDialog(QDialog):
         self.setWindowIcon(QIcon(":/isoxml/icons/logo.png"))
         self.setMinimumWidth(720)
 
-        self.mode_import = QRadioButton("Import (ISOXML → QGIS)")
-        self.mode_export = QRadioButton("Export (QGIS → ISOXML)")
+        self.mode_import = QRadioButton("Import")
+        self.mode_export = QRadioButton("Export")
         self.mode_export.setChecked(True)
 
         mode_row = QHBoxLayout()
@@ -221,6 +221,47 @@ class ToolboxDialog(QDialog):
         opt_row.addWidget(self.chk_seg)
         opt_row.addStretch(1)
         v.addLayout(opt_row)
+
+        # Erweiterte Optionen (einklappbar)
+        self.btn_adv_export = QToolButton()
+        self.btn_adv_export.setText("Erweitert")
+        self.btn_adv_export.setCheckable(True)
+        self.btn_adv_export.setChecked(False)
+        self.btn_adv_export.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.btn_adv_export.setArrowType(Qt.RightArrow)
+
+        self.adv_export_widget = QWidget()
+        adv_layout = QFormLayout(self.adv_export_widget)
+        adv_layout.setContentsMargins(24, 4, 4, 4)
+
+        self.chk_densify_curves = QCheckBox("Kurven nach Intervall verdichten")
+        self.spin_densify_interval = QDoubleSpinBox()
+        self.spin_densify_interval.setDecimals(2)
+        self.spin_densify_interval.setRange(0.10, 1000.0)
+        self.spin_densify_interval.setSingleStep(0.50)
+        self.spin_densify_interval.setValue(3.0)
+        self.spin_densify_interval.setSuffix(" m")
+        self.spin_densify_interval.setEnabled(False)
+
+        self.chk_densify_curves.toggled.connect(self.spin_densify_interval.setEnabled)
+
+        densify_row = QHBoxLayout()
+        densify_row.addWidget(self.chk_densify_curves)
+        densify_row.addWidget(self.spin_densify_interval)
+        densify_row.addStretch(1)
+
+        adv_layout.addRow(densify_row)
+
+        self.adv_export_widget.setVisible(False)
+
+        def _toggle_adv_export(checked):
+            self.adv_export_widget.setVisible(checked)
+            self.btn_adv_export.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+
+        self.btn_adv_export.toggled.connect(_toggle_adv_export)
+
+        v.addWidget(self.btn_adv_export)
+        v.addWidget(self.adv_export_widget)
 
         # CTR→FRM→Felder tree
         self.tree = QTreeWidget()
@@ -1362,6 +1403,8 @@ class LkTechnikPathPlanner:
         is_john_deere = self.dlg.chk_jd_gen4.isChecked()
         is_v3 = self.dlg.chk_v3.isChecked()
         use_segments = (self.dlg.chk_seg.isChecked() and not is_v3 and not is_john_deere)
+        densify_curves = self.dlg.chk_densify_curves.isChecked()
+        densify_interval_m = float(self.dlg.spin_densify_interval.value())
 
         if not out_dir:
             self.iface.messageBar().pushMessage(
@@ -1405,7 +1448,7 @@ class LkTechnikPathPlanner:
             "VersionMajor": "3" if is_v3 else "4",
             "VersionMinor": "0",
             "ManagementSoftwareManufacturer": "LK-Technik Mold",
-            "ManagementSoftwareVersion": "1.1.6",
+            "ManagementSoftwareVersion": "1.1.8",
             "DataTransferOrigin": "1"
         })
 
@@ -1514,6 +1557,156 @@ class LkTechnikPathPlanner:
                         pxy = ct.transform(QgsPointXY(x, y))
                         return pxy.x(), pxy.y()  # lon, lat
                     return x, y
+                
+                def _metric_crs_for_layer(layer):
+                    """
+                    Liefert ein metrisches CRS für die Verdichtung.
+                    Priorität:
+                    1) Layer-CRS, wenn metrisch
+                    2) Projekt-CRS, wenn metrisch
+                    3) fallback: EPSG:32633
+                    """
+                    try:
+                        if layer and layer.crs().isValid() and layer.crs().mapUnits() == Qgis.DistanceUnit.Meters:
+                            return layer.crs()
+                    except Exception:
+                        pass
+
+                    try:
+                        prj_crs = QgsProject.instance().crs()
+                        if prj_crs.isValid() and prj_crs.mapUnits() == Qgis.DistanceUnit.Meters:
+                            return prj_crs
+                    except Exception:
+                        pass
+
+                    return QgsCoordinateReferenceSystem("EPSG:32633")
+
+                def _densify_geometry_for_export(geom, source_layer, interval_m):
+                    """
+                    Verdichtet eine Geometrie NUR auf einer Kopie.
+                    Rückgabe in WGS84-Geometrie, damit der restliche Export unverändert bleibt.
+                    """
+                    if geom is None or geom.isEmpty():
+                        return None
+
+                    try:
+                        geom_copy = QgsGeometry(geom)
+                    except Exception:
+                        geom_copy = geom.constGet().clone()
+                        geom_copy = QgsGeometry(geom_copy)
+
+                    metric_crs = _metric_crs_for_layer(source_layer)
+                    source_crs = source_layer.crs()
+                    wgs84 = QgsCoordinateReferenceSystem("EPSG:4326")
+                    project_ctx = QgsProject.instance()
+
+                    to_metric = None
+                    to_wgs = None
+
+                    try:
+                        if source_crs.isValid() and source_crs != metric_crs:
+                            to_metric = QgsCoordinateTransform(source_crs, metric_crs, project_ctx)
+                    except Exception:
+                        to_metric = None
+
+                    try:
+                        if metric_crs.isValid() and metric_crs != wgs84:
+                            to_wgs = QgsCoordinateTransform(metric_crs, wgs84, project_ctx)
+                    except Exception:
+                        to_wgs = None
+
+                    if to_metric:
+                        try:
+                            geom_copy.transform(to_metric)
+                        except Exception:
+                            return None
+
+                    try:
+                        geom_copy = geom_copy.densifyByDistance(interval_m)
+                    except Exception:
+                        return None
+
+                    if to_wgs:
+                        try:
+                            geom_copy.transform(to_wgs)
+                        except Exception:
+                            return None
+                    elif source_crs.isValid() and source_crs != wgs84:
+                        try:
+                            direct_to_wgs = QgsCoordinateTransform(source_crs, wgs84, project_ctx)
+                            geom_copy.transform(direct_to_wgs)
+                        except Exception:
+                            return None
+
+                    return geom_copy
+                
+                def _geometry_to_lines_xy(geom):
+                    """
+                    Wandelt eine Linien-Geometrie robust in eine Liste von Linien um.
+                    Rückgabeformat:
+                        [
+                            [QgsPointXY, QgsPointXY, ...],   # eine Linie
+                            [QgsPointXY, QgsPointXY, ...],   # weitere Linie
+                        ]
+                    Funktioniert für:
+                    - LineString
+                    - MultiLineString
+                    """
+                    if geom is None or geom.isEmpty():
+                        return []
+
+                    # zuerst versuchen: MultiLine
+                    try:
+                        lines = geom.asMultiPolyline()
+                        if lines:
+                            return lines
+                    except Exception:
+                        pass
+
+                    # dann versuchen: einzelne Line
+                    try:
+                        line = geom.asPolyline()
+                        if line:
+                            return [line]
+                    except Exception:
+                        pass
+
+                    return []
+
+                def _export_lines_from_feature(track_feature, line_layer, densify_enabled=False, interval_m=1.0):
+                    """
+                    Gibt exportierbare Linien als Liste von Polylinien in WGS84 zurück.
+                    Verdichtung nur bei Kurven (>2 Punkte).
+                    """
+                    geom = track_feature.geometry()
+                    if geom is None or geom.isEmpty():
+                        return []
+
+                    raw_lines = _geometry_to_lines_xy(geom)
+                    if not raw_lines:
+                        return []
+
+                    if densify_enabled:
+                        # Nur verdichten, wenn mindestens eine Linie mehr als 2 Stützpunkte hat
+                        has_curve = any(len(line) > 2 for line in raw_lines)
+
+                        if has_curve:
+                            densified_geom = _densify_geometry_for_export(geom, line_layer, interval_m)
+                            if densified_geom is not None and not densified_geom.isEmpty():
+                                densified_lines = _geometry_to_lines_xy(densified_geom)
+                                if densified_lines:
+                                    return densified_lines
+
+                    # Standardweg ohne Verdichtung: wie bisher, aber in WGS84
+                    result = []
+                    for line in raw_lines:
+                        wgs_line = []
+                        for pt in line:
+                            lon, lat = _to_wgs_xy_from_point(pt, ct_line)
+                            wgs_line.append(QgsPointXY(lon, lat))
+                        if wgs_line:
+                            result.append(wgs_line)
+                    return result
 
                 field_ids_filter = selected[ctr_name][frm_name]
 
@@ -1626,18 +1819,21 @@ class LkTechnikPathPlanner:
                                         continue
                                 except Exception:
                                     continue
-                                lines = track_feature.geometry().asMultiPolyline() or []
-                                if not lines:
-                                    single = track_feature.geometry().asPolyline()
-                                    if single:
-                                        lines = [single]
+
                                 track_name = track_feature['Name'] if 'Name' in line_names else ''
+
+                                lines = _export_lines_from_feature(
+                                    track_feature,
+                                    line_layer,
+                                    densify_enabled=densify_curves,
+                                    interval_m=densify_interval_m
+                                )
+
                                 for line in lines:
                                     lsg_line = ET.SubElement(pfd_element, 'LSG', {'A': '5', 'B': track_name})
                                     for i, pt in enumerate(line):
                                         a_val = '6' if i == 0 else ('7' if i == len(line)-1 else '9')
-                                        lonl, latl = _to_wgs_xy_from_point(pt, ct_line)
-                                        ET.SubElement(lsg_line, 'PNT', {'A': a_val, 'C': str(latl), 'D': str(lonl)})
+                                        ET.SubElement(lsg_line, 'PNT', {'A': a_val, 'C': str(pt.y()), 'D': str(pt.x())})
                         else:
                             if use_segments:
                                 line_fmap = _field_map(line_layer)              # lowercase -> echter Feldname
@@ -1670,11 +1866,13 @@ class LkTechnikPathPlanner:
                                         'A': next_ggp_id(),
                                         'B': f'{seg_label}'})
                                     for track_feature in feats:
-                                        lines = track_feature.geometry().asMultiPolyline() or []
-                                        if not lines:
-                                            single = track_feature.geometry().asPolyline()
-                                            if single:
-                                                lines = [single]
+                                        lines = _export_lines_from_feature(
+                                            track_feature,
+                                            line_layer,
+                                            densify_enabled=densify_curves,
+                                            interval_m=densify_interval_m
+                                        )
+
                                         for line in lines:
                                             c_value = '3' if len(line) > 2 else '1'
                                             gpn_element = ET.SubElement(ggp_element, 'GPN', {
@@ -1688,14 +1886,14 @@ class LkTechnikPathPlanner:
                                             inner_lsg = ET.SubElement(gpn_element, 'LSG', {'A': '5'})
                                             for i, pt in enumerate(line):
                                                 a_val = '6' if i == 0 else ('7' if i == len(line)-1 else '9')
-                                                lonl, latl = _to_wgs_xy_from_point(pt, ct_line)
-                                                ET.SubElement(inner_lsg, 'PNT', {'A': a_val, 'C': str(latl), 'D': str(lonl)})
+                                                ET.SubElement(inner_lsg, 'PNT', {'A': a_val, 'C': str(pt.y()), 'D': str(pt.x())})
                                 for track_feature in non_segment:
-                                    lines = track_feature.geometry().asMultiPolyline() or []
-                                    if not lines:
-                                        single = track_feature.geometry().asPolyline()
-                                        if single:
-                                            lines = [single]
+                                    lines = _export_lines_from_feature(
+                                        track_feature,
+                                        line_layer,
+                                        densify_enabled=densify_curves,
+                                        interval_m=densify_interval_m
+                                    )
                                     track_name = track_feature['Name'] if 'Name' in line_names else ''
                                     ggp_extra = ET.SubElement(pfd_element, 'GGP', {
                                         'A': next_ggp_id(),
@@ -1713,8 +1911,7 @@ class LkTechnikPathPlanner:
                                         inner_lsg_extra = ET.SubElement(gpn_extra, 'LSG', {'A': '5'})
                                         for i, pt in enumerate(line):
                                             a_val = '6' if i == 0 else ('7' if i == len(line)-1 else '9')
-                                            lonl, latl = _to_wgs_xy_from_point(pt, ct_line)
-                                            ET.SubElement(inner_lsg_extra, 'PNT', {'A': a_val, 'C': str(latl), 'D': str(lonl)})
+                                            ET.SubElement(inner_lsg_extra, 'PNT', {'A': a_val, 'C': str(pt.y()), 'D': str(pt.x())})
                             else:
                                 line_fmap = _field_map(line_layer)
                                 id_attr   = _pick_field(line_fmap, "ID", "field_id")
@@ -1740,11 +1937,12 @@ class LkTechnikPathPlanner:
 
                                     track_name = str(track_feature[name_attr]).strip() if name_attr else ''
 
-                                    lines = track_feature.geometry().asMultiPolyline() or []
-                                    if not lines:
-                                        single = track_feature.geometry().asPolyline()
-                                        if single:
-                                            lines = [single]
+                                    lines = _export_lines_from_feature(
+                                        track_feature,
+                                        line_layer,
+                                        densify_enabled=densify_curves,
+                                        interval_m=densify_interval_m
+                                    )
 
                                     if not lines:
                                         continue
@@ -1764,11 +1962,10 @@ class LkTechnikPathPlanner:
                                         lsg_element_ = ET.SubElement(gpn_element, 'LSG', {'A': '5'})
                                         for i, pt in enumerate(line):
                                             a_val = "6" if i == 0 else ("7" if i == len(line) - 1 else "9")
-                                            lonl, latl = _to_wgs_xy_from_point(pt, ct_line)
                                             ET.SubElement(lsg_element_, 'PNT', {
                                                 'A': a_val,
-                                                'C': str(latl),
-                                                'D': str(lonl)
+                                                'C': str(pt.y()),
+                                                'D': str(pt.x())
                                             })
                     exported_any = True
 
