@@ -33,7 +33,7 @@ Copyright- und Autorhinweise (Florian Köck, LK-Technik Mold) erhalten bleiben.
 
 Author: Florian Köck
 Institution: LK-Technik Mold
-Version: 1.1.8
+Version: 1.1.9
 Date: 2026-04-13
 """
 
@@ -251,6 +251,23 @@ class ToolboxDialog(QDialog):
         densify_row.addStretch(1)
 
         adv_layout.addRow(densify_row)
+
+        self.chk_extend_curves = QCheckBox("Kurven an den Enden verlängern")
+        self.spin_extend_curves = QDoubleSpinBox()
+        self.spin_extend_curves.setDecimals(2)
+        self.spin_extend_curves.setRange(0.10, 1000.0)
+        self.spin_extend_curves.setSingleStep(0.50)
+        self.spin_extend_curves.setValue(15.0)
+        self.spin_extend_curves.setSuffix(" m")
+        self.spin_extend_curves.setEnabled(False)
+
+        self.chk_extend_curves.toggled.connect(self.spin_extend_curves.setEnabled)
+        extend_row = QHBoxLayout()
+        extend_row.addWidget(self.chk_extend_curves)
+        extend_row.addWidget(self.spin_extend_curves)
+        extend_row.addStretch(1)
+
+        adv_layout.addRow(extend_row)
 
         self.adv_export_widget.setVisible(False)
 
@@ -1405,6 +1422,8 @@ class LkTechnikPathPlanner:
         use_segments = (self.dlg.chk_seg.isChecked() and not is_v3 and not is_john_deere)
         densify_curves = self.dlg.chk_densify_curves.isChecked()
         densify_interval_m = float(self.dlg.spin_densify_interval.value())
+        extend_curves = self.dlg.chk_extend_curves.isChecked()
+        extend_curves_m = float(self.dlg.spin_extend_curves.value())
 
         if not out_dir:
             self.iface.messageBar().pushMessage(
@@ -1448,7 +1467,7 @@ class LkTechnikPathPlanner:
             "VersionMajor": "3" if is_v3 else "4",
             "VersionMinor": "0",
             "ManagementSoftwareManufacturer": "LK-Technik Mold",
-            "ManagementSoftwareVersion": "1.1.8",
+            "ManagementSoftwareVersion": "1.1.9",
             "DataTransferOrigin": "1"
         })
 
@@ -1640,6 +1659,131 @@ class LkTechnikPathPlanner:
 
                     return geom_copy
                 
+                def _extend_line_both_ends(line_pts, extend_m):
+                    """
+                    Verlängert eine einzelne Linie an Anfang und Ende um extend_m Meter.
+                    Erwartet Punkte in einem metrischen CRS.
+                    Gibt eine neue Punktliste zurück.
+                    """
+                    if not line_pts or len(line_pts) < 2 or extend_m <= 0:
+                        return line_pts
+
+                    new_line = list(line_pts)
+
+                    # Anfang verlängern: Richtung aus erstem Segment ableiten
+                    p0 = new_line[0]
+                    p1 = new_line[1]
+                    dx0 = p1.x() - p0.x()
+                    dy0 = p1.y() - p0.y()
+                    len0 = math.hypot(dx0, dy0)
+
+                    if len0 > 0:
+                        ux0 = dx0 / len0
+                        uy0 = dy0 / len0
+                        new_start = QgsPointXY(
+                            p0.x() - ux0 * extend_m,
+                            p0.y() - uy0 * extend_m
+                        )
+                        new_line[0] = new_start
+
+                    # Ende verlängern: Richtung aus letztem Segment ableiten
+                    pn1 = new_line[-2]
+                    pn = new_line[-1]
+                    dx1 = pn.x() - pn1.x()
+                    dy1 = pn.y() - pn1.y()
+                    len1 = math.hypot(dx1, dy1)
+
+                    if len1 > 0:
+                        ux1 = dx1 / len1
+                        uy1 = dy1 / len1
+                        new_end = QgsPointXY(
+                            pn.x() + ux1 * extend_m,
+                            pn.y() + uy1 * extend_m
+                        )
+                        new_line[-1] = new_end
+
+                    return new_line
+                
+                def _extend_geometry_for_export(geom, source_layer, extend_m):
+                    """
+                    Verlängert Liniengeometrien an Anfang und Ende um extend_m Meter.
+                    Arbeitet nur auf einer Kopie und gibt WGS84-Geometrie zurück.
+                    """
+                    if geom is None or geom.isEmpty() or extend_m <= 0:
+                        return None
+
+                    lines_src = _geometry_to_lines_xy(geom)
+                    if not lines_src:
+                        return None
+
+                    metric_crs = _metric_crs_for_layer(source_layer)
+                    source_crs = source_layer.crs()
+                    wgs84 = QgsCoordinateReferenceSystem("EPSG:4326")
+                    project_ctx = QgsProject.instance()
+
+                    to_metric = None
+                    to_wgs = None
+
+                    try:
+                        if source_crs.isValid() and source_crs != metric_crs:
+                            to_metric = QgsCoordinateTransform(source_crs, metric_crs, project_ctx)
+                    except Exception:
+                        to_metric = None
+
+                    try:
+                        if metric_crs.isValid() and metric_crs != wgs84:
+                            to_wgs = QgsCoordinateTransform(metric_crs, wgs84, project_ctx)
+                    except Exception:
+                        to_wgs = None
+
+                    metric_lines = []
+                    for line in lines_src:
+                        metric_line = []
+                        for pt in line:
+                            p = QgsPointXY(pt.x(), pt.y())
+                            if to_metric:
+                                try:
+                                    p = to_metric.transform(p)
+                                except Exception:
+                                    return None
+                            metric_line.append(p)
+                        metric_lines.append(metric_line)
+
+                    extended_metric_lines = []
+                    for line in metric_lines:
+                        # nur Kurven mit mehr als 2 Stützpunkten verlängern
+                        if len(line) > 2:
+                            ext_line = _extend_line_both_ends(line, extend_m)
+                        else:
+                            ext_line = line
+                        extended_metric_lines.append(ext_line)
+
+                    wgs_lines = []
+                    for line in extended_metric_lines:
+                        wgs_line = []
+                        for pt in line:
+                            p = QgsPointXY(pt.x(), pt.y())
+                            if to_wgs:
+                                try:
+                                    p = to_wgs.transform(p)
+                                except Exception:
+                                    return None
+                            elif source_crs.isValid() and source_crs != wgs84 and not to_metric:
+                                try:
+                                    direct_to_wgs = QgsCoordinateTransform(source_crs, wgs84, project_ctx)
+                                    p = direct_to_wgs.transform(p)
+                                except Exception:
+                                    return None
+                            wgs_line.append(p)
+                        wgs_lines.append(wgs_line)
+
+                    try:
+                        if len(wgs_lines) == 1:
+                            return QgsGeometry.fromPolylineXY(wgs_lines[0])
+                        return QgsGeometry.fromMultiPolylineXY(wgs_lines)
+                    except Exception:
+                        return None
+                
                 def _geometry_to_lines_xy(geom):
                     """
                     Wandelt eine Linien-Geometrie robust in eine Liste von Linien um.
@@ -1673,10 +1817,19 @@ class LkTechnikPathPlanner:
 
                     return []
 
-                def _export_lines_from_feature(track_feature, line_layer, densify_enabled=False, interval_m=1.0):
+                def _export_lines_from_feature(
+                    track_feature,
+                    line_layer,
+                    densify_enabled=False,
+                    interval_m=1.0,
+                    extend_enabled=False,
+                    extend_m=0.0
+                ):
                     """
                     Gibt exportierbare Linien als Liste von Polylinien in WGS84 zurück.
-                    Verdichtung nur bei Kurven (>2 Punkte).
+                    Optional:
+                    - Verdichtung nur bei Kurven (>2 Punkte)
+                    - Verlängerung an Anfang und Ende nur bei Kurven (>2 Punkte)
                     """
                     geom = track_feature.geometry()
                     if geom is None or geom.isEmpty():
@@ -1686,18 +1839,31 @@ class LkTechnikPathPlanner:
                     if not raw_lines:
                         return []
 
-                    if densify_enabled:
-                        # Nur verdichten, wenn mindestens eine Linie mehr als 2 Stützpunkte hat
-                        has_curve = any(len(line) > 2 for line in raw_lines)
+                    has_curve = any(len(line) > 2 for line in raw_lines)
 
-                        if has_curve:
-                            densified_geom = _densify_geometry_for_export(geom, line_layer, interval_m)
-                            if densified_geom is not None and not densified_geom.isEmpty():
-                                densified_lines = _geometry_to_lines_xy(densified_geom)
-                                if densified_lines:
-                                    return densified_lines
+                    working_geom = geom
 
-                    # Standardweg ohne Verdichtung: wie bisher, aber in WGS84
+                    # 1) optional verdichten
+                    if densify_enabled and has_curve:
+                        densified_geom = _densify_geometry_for_export(working_geom, line_layer, interval_m)
+                        if densified_geom is not None and not densified_geom.isEmpty():
+                            working_geom = densified_geom
+
+                    # 2) optional verlängern
+                    if extend_enabled and has_curve:
+                        extended_geom = _extend_geometry_for_export(working_geom, line_layer, extend_m)
+                        if extended_geom is not None and not extended_geom.isEmpty():
+                            working_geom = extended_geom
+
+                    # working_geom liegt nach den Export-Hilfsfunktionen in WGS84,
+                    # wenn eine Bearbeitung aktiv war. Sonst noch nach WGS84 transformieren.
+                    edited = (densify_enabled and has_curve) or (extend_enabled and has_curve)
+
+                    if edited:
+                        final_lines = _geometry_to_lines_xy(working_geom)
+                        return final_lines
+
+                    # Standardweg ohne Bearbeitung: Original nach WGS84 transformieren
                     result = []
                     for line in raw_lines:
                         wgs_line = []
@@ -1826,7 +1992,9 @@ class LkTechnikPathPlanner:
                                     track_feature,
                                     line_layer,
                                     densify_enabled=densify_curves,
-                                    interval_m=densify_interval_m
+                                    interval_m=densify_interval_m,
+                                    extend_enabled=extend_curves,
+                                    extend_m=extend_curves_m
                                 )
 
                                 for line in lines:
@@ -1870,7 +2038,9 @@ class LkTechnikPathPlanner:
                                             track_feature,
                                             line_layer,
                                             densify_enabled=densify_curves,
-                                            interval_m=densify_interval_m
+                                            interval_m=densify_interval_m,
+                                            extend_enabled=extend_curves,
+                                            extend_m=extend_curves_m
                                         )
 
                                         for line in lines:
@@ -1892,7 +2062,9 @@ class LkTechnikPathPlanner:
                                         track_feature,
                                         line_layer,
                                         densify_enabled=densify_curves,
-                                        interval_m=densify_interval_m
+                                        interval_m=densify_interval_m,
+                                        extend_enabled=extend_curves,
+                                        extend_m=extend_curves_m
                                     )
                                     track_name = track_feature['Name'] if 'Name' in line_names else ''
                                     ggp_extra = ET.SubElement(pfd_element, 'GGP', {
@@ -1941,7 +2113,9 @@ class LkTechnikPathPlanner:
                                         track_feature,
                                         line_layer,
                                         densify_enabled=densify_curves,
-                                        interval_m=densify_interval_m
+                                        interval_m=densify_interval_m,
+                                        extend_enabled=extend_curves,
+                                        extend_m=extend_curves_m
                                     )
 
                                     if not lines:
