@@ -980,6 +980,34 @@ class LkTechnikPathPlanner:
         target_crs = QgsProject.instance().crs() if use_project_crs else src_crs
         to_target = QgsCoordinateTransform(src_crs, target_crs, QgsProject.instance())
 
+        area_crs = None
+        area_transform = None
+
+        try:
+            if target_crs.isValid() and target_crs.mapUnits() == Qgis.DistanceUnit.Meters:
+                area_crs = target_crs
+            else:
+                area_crs = QgsCoordinateReferenceSystem("EPSG:32633")
+            area_transform = QgsCoordinateTransform(src_crs, area_crs, QgsProject.instance())
+        except Exception:
+            area_crs = QgsCoordinateReferenceSystem("EPSG:32633")
+            area_transform = QgsCoordinateTransform(src_crs, area_crs, QgsProject.instance())
+
+        def _calc_area_from_ring_wgs84(ring_pts_wgs84):
+            """
+            Erwartet Ringpunkte in WGS84 (lon/lat als QgsPointXY).
+            Berechnet Fläche in m² über metrisches CRS.
+            """
+            try:
+                if len(ring_pts_wgs84) < 3:
+                    return 0.0
+
+                ring_metric = [area_transform.transform(pt) for pt in ring_pts_wgs84]
+                geom_metric = QgsGeometry.fromPolygonXY([ring_metric])
+                return float(geom_metric.area())
+            except Exception:
+                return 0.0
+
         def _tx_pt_xy(lon, lat):
             if target_crs == src_crs:
                 return QgsPointXY(lon, lat)
@@ -1128,10 +1156,21 @@ class LkTechnikPathPlanner:
                     numeric_id = int(pfd_digits or 0)
             except Exception:
                 numeric_id = 0
+
+            pfd_area = pfd.get("D")
+            pln_tmp = pfd.find("PLN")
+
+            if _is_nullish(pfd_area) or str(pfd_area).strip() in ("0", "0.0"):
+                if pln_tmp is not None:
+                    pln_area = pln_tmp.get("C", "0")
+                    if not _is_nullish(pln_area):
+                        pfd_area = pln_area
+
             try:
-                area_val = int(pfd_area)
+                area_val = float(pfd_area)
             except Exception:
                 area_val = 0.0
+            
 
             ctr_ref_from_pfd = pfd.get("E") or pfd.get("CTRIdRef")
 
@@ -1155,14 +1194,29 @@ class LkTechnikPathPlanner:
                 lsg_field = pln.find("LSG[@A='1']")
                 if lsg_field is not None:
                     ring_pts = []
+                    ring_pts_wgs84 = []
+
                     for pnt in lsg_field.findall("PNT"):
                         a_val = pnt.get("A")
                         if a_val in ("10", "2"):
-                            lat = float(pnt.get("C", "0")); lon = float(pnt.get("D", "0"))
+                            lat = float(pnt.get("C", "0"))
+                            lon = float(pnt.get("D", "0"))
+
+                            ring_pts_wgs84.append(QgsPointXY(lon, lat))
                             ring_pts.append(_tx_pt_xy(lon, lat))
+
                     if len(ring_pts) > 2:
+                        final_area_val = area_val
+
+                        if not final_area_val or final_area_val <= 0:
+                            calc_area = _calc_area_from_ring_wgs84(ring_pts_wgs84)
+                            if calc_area > 0:
+                                final_area_val = calc_area
+
                         feat_f = QgsFeature(field_layer.fields())
-                        feat_f.setAttribute("ID", numeric_id); feat_f.setAttribute("Name", pfd_name); feat_f.setAttribute("Flaeche", area_val)
+                        feat_f.setAttribute("ID", numeric_id)
+                        feat_f.setAttribute("Name", pfd_name)
+                        feat_f.setAttribute("Flaeche", final_area_val)
                         feat_f.setGeometry(QgsGeometry.fromPolygonXY([ring_pts]))
                         dp_field.addFeatures([feat_f])
                 for lsg_area in pln.findall("LSG"):
@@ -1351,7 +1405,7 @@ class LkTechnikPathPlanner:
             "VersionMajor": "3" if is_v3 else "4",
             "VersionMinor": "0",
             "ManagementSoftwareManufacturer": "LK-Technik Mold",
-            "ManagementSoftwareVersion": "2020.02.00.294",
+            "ManagementSoftwareVersion": "1.1.6",
             "DataTransferOrigin": "1"
         })
 
