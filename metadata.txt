@@ -2,7 +2,7 @@
 name=LK-Technik Path Planner
 qgisMinimumVersion=3.16
 qgisMaximumVersion=3.99
-version=1.1.9
+version=1.2.0
 author=Florian Köck
 email=florian.koeck@lk-noe.at
 category=Analysis
@@ -11,9 +11,9 @@ license=GPL-3.0-or-later
 homepage=https://noe.lko.at
 repository=https://github.com/lktechnikmold/lk_technik_path_planner
 tracker=https://github.com/lktechnikmold/lk_technik_path_planner/issues
-description=Import und Export von ISOXML und John Deere Gen4 - Dateien für Lenksysteme
-about=Combined plugin for ISOXML import and export.
- Provides a structured selection tree (Customer -> Farm -> Fields) and supports ISOXML v3, v4 and John Deere Gen4, including optional contour segments.
+description=Import and export of ISOXML-based guidance data and John Deere Gen4 files for agricultural machinery.
+about=Combined plugin for ISOXML and John Deere Gen4 import and export.
+Provides a structured selection tree (Customer → Farm → Fields) and supports ISOXML v3, v4 and John Deere Gen4, including optional contour segments
  
  DISCLAIMER:
  This plugin is distributed under the GNU General Public License v3.0 (or later).

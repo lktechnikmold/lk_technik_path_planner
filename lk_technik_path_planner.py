@@ -33,7 +33,7 @@ Copyright- und Autorhinweise (Florian Köck, LK-Technik Mold) erhalten bleiben.
 
 Author: Florian Köck
 Institution: LK-Technik Mold
-Version: 1.1.9
+Version: 1.2.0
 Date: 2026-04-13
 """
 
@@ -224,7 +224,7 @@ class ToolboxDialog(QDialog):
 
         # Erweiterte Optionen (einklappbar)
         self.btn_adv_export = QToolButton()
-        self.btn_adv_export.setText("Erweitert")
+        self.btn_adv_export.setText("Erweiterte Einstellungen")
         self.btn_adv_export.setCheckable(True)
         self.btn_adv_export.setChecked(False)
         self.btn_adv_export.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
@@ -1467,7 +1467,7 @@ class LkTechnikPathPlanner:
             "VersionMajor": "3" if is_v3 else "4",
             "VersionMinor": "0",
             "ManagementSoftwareManufacturer": "LK-Technik Mold",
-            "ManagementSoftwareVersion": "1.1.9",
+            "ManagementSoftwareVersion": "1.2.0",
             "DataTransferOrigin": "1"
         })
 

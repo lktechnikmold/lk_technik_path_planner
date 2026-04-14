@@ -1,8 +1,8 @@
-# ISOXML Toolbox (QGIS Plugin)
+# LK-Technik Path Planner
 
-ISOXML Toolbox – Combined QGIS Plugin (Import & Export)
+LK-Technik Path Planner – Combined QGIS Plugin (Import & Export)
 
-This plugin provides import and export functionality for ISOXML data within QGIS.
+This plugin provides import and export functionality for guidance data in agricultural workflows, supporting both ISOXML and John Deere Gen4 formats within QGIS.
 
 Developed for QGIS 3.x
 
@@ -21,12 +21,14 @@ For full warranty and liability terms, see Sections 15 and 16 of the GNU General
 
 ## Overview
 
-The ISOXML Toolbox combines:
+The LK-Technik Path Planner combines:
 
-- Import (ISOXML → QGIS)
-- Export (QGIS → ISOXML)
+Import (ISOXML / John Deere Gen4 → QGIS)
+Export (QGIS → ISOXML / John Deere Gen4)
 
-It supports structured ISOXML data (e.g. TASKDATA.XML) and integrates into the QGIS interface.
+It enables seamless exchange of guidance lines and field data between farm machinery and GIS.
+
+The plugin supports structured ISOXML data (e.g. TASKDATA.XML) and integrates directly into the QGIS interface.
 
 ---
 
@@ -36,11 +38,12 @@ It supports structured ISOXML data (e.g. TASKDATA.XML) and integrates into the Q
 - **Export**:
   - Reads project tree (client → farm → layers)
   - Selectable tree with checkboxes for customers, companies, and fields (from the *Feldgrenzen* layer)
-  - Supports **ISOXML v3** and **ISOXML v4**
-  - Optional contour segmentation (v4 only)
+  - Supports **ISOXML v3**, **ISOXML v4** and **John Deere Gen4**
+  - Optional contour segmentation (ISOXML v4 only)
+  - Optional curve densification and extension at line ends
 
 - **Import**:
-  - Reads `TASKDATA.XML`
+  - Reads `TASKDATA.XML`, `MasterData.XML` or Folder with `TASKDATA.XML` or `MasterData.XML` in it.
   - Creates structured layer groups (client → farm)
   - Generates layers:
     - Feldgrenzen
@@ -52,7 +55,7 @@ It supports structured ISOXML data (e.g. TASKDATA.XML) and integrates into the Q
 
 ## Usage
 
-- Open **ISOXML Toolbox (Import/Export)** from the toolbar or menu
+- Open **LK-Technik Path Planner** from the toolbar or menu
 - Select **Import** or **Export**
 - Configure options
 - Click **Run**
@@ -82,13 +85,9 @@ The primary developer is responsible for:
 
 ### Contributions
 
-External contributions are welcome.
+This project is primarily developed and maintained internally.
 
-Contributors must:
-
-- Submit changes via pull requests in the official repository
-- Agree that contributions are licensed under the GNU General Public License v3.0 (or later)
-- Ensure no proprietary or incompatible third-party code is introduced
+External contributions are not actively solicited. If necessary, contributions may be considered on a case-by-case basis and must align with project standards and licensing requirements.
 
 ### Issue Tracking
 
@@ -98,7 +97,7 @@ Bug reports and feature requests should be submitted via the official issue trac
 
 ## License
 
-Copyright (C) 2024–2025  
+Copyright (C) 2024–2026  
 Landwirtschaftskammer Niederösterreich
 
 Developed by Florian Köck.

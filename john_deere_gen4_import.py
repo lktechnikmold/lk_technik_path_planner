@@ -14,7 +14,8 @@ from qgis.core import (
     QgsPointXY,
     QgsLayerTreeGroup,
     QgsCoordinateReferenceSystem,
-    QgsCoordinateTransform
+    QgsCoordinateTransform,
+    QgsVectorFileWriter
 )
 from qgis.PyQt.QtCore import QVariant
 
@@ -70,6 +71,49 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
     target_crs = QgsProject.instance().crs() if use_project_crs else src_crs
     to_target = QgsCoordinateTransform(src_crs, target_crs, QgsProject.instance())
 
+    area_crs = None
+    area_transform = None
+
+    try:
+        if target_crs.isValid() and target_crs.mapUnits() == Qgis.DistanceUnit.Meters:
+            area_crs = target_crs
+        else:
+            area_crs = QgsCoordinateReferenceSystem("EPSG:32633")
+        area_transform = QgsCoordinateTransform(src_crs, area_crs, QgsProject.instance())
+    except Exception:
+        area_crs = QgsCoordinateReferenceSystem("EPSG:32633")
+        area_transform = QgsCoordinateTransform(src_crs, area_crs, QgsProject.instance())
+
+    def _calc_area_from_ring_coords_wgs84(rings_coords):
+        """
+        rings_coords:
+            Liste von Ringen im GeoJSON-Format:
+            [
+                [[lon, lat], [lon, lat], ...],   # äußerer Ring
+                [[lon, lat], [lon, lat], ...],   # Loch optional
+            ]
+        Berechnet Fläche in m² in einem metrischen CRS.
+        """
+        try:
+            rings_metric = []
+            for ring in rings_coords:
+                pts_metric = []
+                for c in ring:
+                    if len(c) < 2:
+                        continue
+                    pt = area_transform.transform(QgsPointXY(float(c[0]), float(c[1])))
+                    pts_metric.append(QgsPointXY(pt.x(), pt.y()))
+                if len(pts_metric) >= 3:
+                    rings_metric.append(pts_metric)
+
+            if not rings_metric:
+                return 0.0
+
+            geom_metric = QgsGeometry.fromPolygonXY(rings_metric)
+            return float(geom_metric.area())
+        except Exception:
+            return 0.0
+
     def _tx_xy(lon, lat):
         pt = QgsPointXY(float(lon), float(lat))
         if target_crs != src_crs:
@@ -78,6 +122,9 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
 
     def _norm_name(s):
         return " ".join((s or "").split())
+
+    def _safe(name):
+        return (name or "_untitled_").replace(os.sep, "_").replace("/", "_").strip()
 
     def _safe_float(v, default=0.0):
         try:
@@ -136,6 +183,68 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
             "Punkthindernis": point_layer,
             "Flaechenhindernis": area_layer,
         }
+    
+    def _persist_farm_layers(layers_dict, ctr_name, frm_name, frm_group):
+        if not out_dir:
+            return layers_dict
+
+        base = os.path.join(out_dir, _safe(ctr_name), _safe(frm_name))
+        os.makedirs(base, exist_ok=True)
+
+        new_layers = {}
+        tr_ctx = project.transformContext()
+
+        for key, mem_layer in layers_dict.items():
+            gpkg_path = os.path.join(base, f"{_safe(key)}.gpkg")
+
+            opts = QgsVectorFileWriter.SaveVectorOptions()
+            opts.driverName = "GPKG"
+            opts.layerName = key
+
+            try:
+                opts.attributesToExport = [
+                    f.name() for f in mem_layer.fields()
+                    if f.name().lower() != "fid"
+                ]
+            except Exception:
+                pass
+
+            ret = QgsVectorFileWriter.writeAsVectorFormatV3(
+                mem_layer, gpkg_path, tr_ctx, opts
+            )
+
+            res = ret[0] if isinstance(ret, (tuple, list)) else ret
+            if res != QgsVectorFileWriter.NoError:
+                new_layers[key] = mem_layer
+                continue
+
+            uri = f"{gpkg_path}|layername={key}"
+            file_layer = QgsVectorLayer(uri, mem_layer.name(), "ogr")
+
+            if file_layer.isValid():
+                try:
+                    parent = project.layerTreeRoot().findLayer(mem_layer.id()).parent()
+                except Exception:
+                    parent = None
+
+                project.removeMapLayer(mem_layer.id())
+                project.addMapLayer(file_layer, False)
+
+                if parent and isinstance(parent, QgsLayerTreeGroup):
+                    parent.addLayer(file_layer)
+                else:
+                    frm_group.addLayer(file_layer)
+
+                plugin._apply_predefined_style(file_layer)
+                if key == "Feldgrenzen":
+                    plugin._apply_feldgrenzen_color(file_layer, frm_group)
+
+                new_layers[key] = file_layer
+            else:
+                new_layers[key] = mem_layer
+
+        plugin._reorder_frm_group_layers(frm_group)
+        return new_layers
 
     def _read_json(path):
         with open(path, "r", encoding="utf-8") as f:
@@ -146,29 +255,39 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
         coords = geom_json.get("coordinates", [])
 
         polygons = []
+        source_polygons = []
 
         if gtype == "Polygon":
             coords = [coords]
         elif gtype != "MultiPolygon":
-            return None
+            return None, None
 
         for poly in coords:
             rings_xy = []
+            rings_src = []
+
             for ring in poly:
                 pts = []
+                src_ring = []
+
                 for c in ring:
                     if len(c) < 2:
                         continue
+                    src_ring.append([float(c[0]), float(c[1])])
                     pts.append(_tx_xy(c[0], c[1]))
+
                 if len(pts) >= 3:
                     rings_xy.append(pts)
+                    rings_src.append(src_ring)
+
             if rings_xy:
                 polygons.append(rings_xy)
+                source_polygons.append(rings_src)
 
         if not polygons:
-            return None
+            return None, None
 
-        return QgsGeometry.fromMultiPolygonXY(polygons)
+        return QgsGeometry.fromMultiPolygonXY(polygons), source_polygons
 
     def _multiline_from_geojson_geometry(geom_json):
         gtype = geom_json.get("type")
@@ -283,6 +402,8 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
         plugin._apply_feldgrenzen_color(layers["Feldgrenzen"], frm_group)
         plugin._reorder_frm_group_layers(frm_group)
 
+        layers = _persist_farm_layers(layers, ctr_name, frm_name, frm_group)
+
         per_farm_layers[key] = layers
         per_farm_groups[key] = frm_group
         return layers
@@ -325,7 +446,7 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
         if not geom_json:
             continue
 
-        qgs_geom = _polygon_from_geojson_geometry(geom_json)
+        qgs_geom, source_polygons = _polygon_from_geojson_geometry(geom_json)
         if qgs_geom is None:
             continue
 
@@ -335,7 +456,12 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
         feat = QgsFeature(layer.fields())
         feat.setAttribute("ID", int(field_info["field_id"]))
         feat.setAttribute("Name", field_info["name"])
-        feat.setAttribute("Flaeche", qgs_geom.area())
+        calc_area = 0.0
+        if source_polygons:
+            for poly_rings in source_polygons:
+                calc_area += _calc_area_from_ring_coords_wgs84(poly_rings)
+
+        feat.setAttribute("Flaeche", calc_area)
         feat.setGeometry(qgs_geom)
         layer.dataProvider().addFeatures([feat])
 
@@ -490,7 +616,7 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
             layer.dataProvider().addFeatures([feat])
 
         elif gtype in ("Polygon", "MultiPolygon"):
-            qgs_geom = _polygon_from_geojson_geometry(geom_json)
+            qgs_geom, _ = _polygon_from_geojson_geometry(geom_json)
             if qgs_geom is None:
                 continue
 
