@@ -25,11 +25,5 @@ about=Combined plugin for ISOXML and John Deere Gen4 import and export.
     
     Copyright (C) 2024-2026 Landwirtschaftskammer Niederösterreich
     Developed by Florian Köck (LK-Technik Mold)
- 
- User guide:
- https://www.youtube.com/playlist?list=PLBJSn-Fmyqo9rBs2AY4UGp8IYx5PcxJxG
- 
- Copyright (C) 2024-2026 Landwirtschaftskammer Niederösterreich
- Developed by Florian Köck (LK-Technik Mold)
 experimental=False
 deprecated=False
