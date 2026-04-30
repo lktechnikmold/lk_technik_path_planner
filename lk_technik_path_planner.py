@@ -49,7 +49,7 @@ except Exception:
 from qgis.PyQt.QtWidgets import (
     QAction, QDialog, QFileDialog, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem,
     QPushButton, QLineEdit, QLabel, QGroupBox, QCheckBox, QRadioButton, QStackedWidget,
-    QFormLayout, QInputDialog, QMessageBox, QWidget, QToolButton, QDoubleSpinBox
+    QFormLayout, QInputDialog, QMessageBox, QWidget, QToolButton, QDoubleSpinBox, QButtonGroup, QComboBox
 )
 try:
     from .john_deere_gen4_export import export_john_deere_gen4
@@ -108,6 +108,62 @@ def _feat_val(feat: QgsFeature, fmap: dict, *candidates: str, default=None):
         return feat[fn]
     except Exception:
         return default
+
+class AddFarmDialog(QDialog):
+    def __init__(self, customers, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Betrieb hinzufügen")
+        self.setMinimumWidth(420)
+
+        layout = QFormLayout(self)
+
+        self.cmb_customer = QComboBox()
+        self.cmb_customer.addItems(customers)
+
+        self.edit_farm_name = QLineEdit()
+
+        layout.addRow("Kunde auswählen:", self.cmb_customer)
+        layout.addRow("Betriebsname:", self.edit_farm_name)
+
+        crs_group = QGroupBox("KBS")
+        crs_row = QHBoxLayout(crs_group)
+
+        self.rb_wgs84 = QRadioButton("WGS84 - EPSG:4326")
+        self.rb_project = QRadioButton("Projekt-KBS")
+        self.rb_wgs84.setChecked(True)
+
+        self.crs_buttons = QButtonGroup(self)
+        self.crs_buttons.addButton(self.rb_wgs84)
+        self.crs_buttons.addButton(self.rb_project)
+
+        crs_row.addWidget(self.rb_wgs84)
+        crs_row.addWidget(self.rb_project)
+        crs_row.addStretch(1)
+
+        layout.addRow(crs_group)
+
+        btn_row = QHBoxLayout()
+        self.btn_ok = QPushButton("OK")
+        self.btn_cancel = QPushButton("Abbrechen")
+        self.btn_ok.clicked.connect(self.accept)
+        self.btn_cancel.clicked.connect(self.reject)
+
+        btn_row.addStretch(1)
+        btn_row.addWidget(self.btn_ok)
+        btn_row.addWidget(self.btn_cancel)
+
+        layout.addRow(btn_row)
+
+    def customer_name(self):
+        return _norm_name(self.cmb_customer.currentText())
+
+    def farm_name(self):
+        return _norm_name(self.edit_farm_name.text())
+
+    def selected_crs(self):
+        if self.rb_project.isChecked():
+            return QgsProject.instance().crs()
+        return QgsCoordinateReferenceSystem("EPSG:4326")
 
 class ToolboxDialog(QDialog):
     def __init__(self, parent=None):
@@ -802,13 +858,16 @@ class LkTechnikPathPlanner:
         dn = QFileDialog.getExistingDirectory(self.iface.mainWindow(), "Ablageordner für neue Betriebe wählen")
         return dn or ""
 
-    def _ensure_frm_layers_on_disk(self, ctr_name: str, frm_name: str, frm_group: QgsLayerTreeGroup):
+    def _ensure_frm_layers_on_disk(self, ctr_name: str, frm_name: str, frm_group: QgsLayerTreeGroup, target_crs=None):
         """
         Erstellt 4 leere Layer als GPKG und lädt sie in die Gruppe,
         falls sie dort noch nicht existieren.
         """
         project = QgsProject.instance()
-        crs_authid = project.crs().authid() if project.crs().isValid() else "EPSG:4326"
+        if target_crs is None or not target_crs.isValid():
+            target_crs = QgsCoordinateReferenceSystem("EPSG:4326")
+
+        crs_authid = target_crs.authid()
 
         base_dir = self._get_project_base_dir()
         if not base_dir:
@@ -940,37 +999,55 @@ class LkTechnikPathPlanner:
         project = QgsProject.instance()
         root = project.layerTreeRoot()
 
-        # Kundenliste = Root-Gruppen
         customers = [ch.name() for ch in root.children() if isinstance(ch, QgsLayerTreeGroup)]
+
         if not customers:
-            QMessageBox.information(self.iface.mainWindow(), "Hinweis", "Es gibt noch keinen Kunden. Bitte zuerst einen Kunden anlegen.")
+            QMessageBox.information(
+                self.iface.mainWindow(),
+                "Hinweis",
+                "Es gibt noch keinen Kunden. Bitte zuerst einen Kunden anlegen."
+            )
             return
 
-        ctr_name, ok = QInputDialog.getItem(self.iface.mainWindow(), "Betrieb hinzufügen", "Kunde auswählen:", customers, 0, False)
-        if not ok:
-            return
-        ctr_name = _norm_name(ctr_name)
+        dlg = AddFarmDialog(customers, self.iface.mainWindow())
 
-        frm_name, ok = QInputDialog.getText(self.iface.mainWindow(), "Betrieb hinzufügen", "Betriebsname:")
-        if not ok:
-            return
-        frm_name = _norm_name(frm_name)
-        if not frm_name:
+        if dlg.exec_() != QDialog.Accepted:
             return
 
-        # Gruppe holen/erstellen
+        ctr_name = dlg.customer_name()
+        frm_name = dlg.farm_name()
+        target_crs = dlg.selected_crs()
+
+        if not ctr_name or not frm_name:
+            return
+
         ctr_group = self._find_or_create_group(root, ctr_name)
         frm_group = self._find_or_create_group(ctr_group, frm_name)
 
-        # Layer erzeugen
         try:
-            self._ensure_frm_layers_on_disk(ctr_name, frm_name, frm_group)
+            self._ensure_frm_layers_on_disk(
+                ctr_name,
+                frm_name,
+                frm_group,
+                target_crs
+            )
         except Exception as e:
-            self.iface.messageBar().pushMessage("Fehler", f"Konnte Betrieb/Layers nicht erstellen: {e}", level=Qgis.Critical, duration=6)
+            self.iface.messageBar().pushMessage(
+                "Fehler",
+                f"Konnte Betrieb/Layers nicht erstellen: {e}",
+                level=Qgis.Critical,
+                duration=6
+            )
             return
 
         self.dlg.refresh_tree()
-        self.iface.messageBar().pushMessage("OK", f"Betrieb '{frm_name}' mit Layern erstellt.", level=Qgis.Success, duration=4)
+
+        self.iface.messageBar().pushMessage(
+            "OK",
+            f"Betrieb '{frm_name}' mit Layern erstellt ({target_crs.authid()}).",
+            level=Qgis.Success,
+            duration=4
+        )
 
     # ------------------------- IMPORT -------------------------
     def _do_import(self):
