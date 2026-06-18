@@ -678,19 +678,11 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
                     if fid not in merged or (not merged.get(fid) and nm):
                         merged[fid] = nm
                 _write_felder_csv(csv_path, merged)
-                # vorhandenen Felder-Layer neu laden oder neu anlegen
-                existing = None
-                for node in frm_group.children():
-                    try:
-                        lyr = node.layer()
-                    except Exception:
-                        lyr = None
-                    if isinstance(lyr, QgsVectorLayer) and lyr.name() == FELDER_LAYER_NAME:
-                        existing = lyr
-                        break
-                if existing is not None:
-                    existing.reload()
-                else:
+                # Felder-Layer frisch neu laden (entfernen + neu), damit das
+                # Dropdown sofort die Namen zeigt (siehe Hauptmodul).
+                try:
+                    plugin._recreate_felder_layer(frm_group, csv_path)
+                except Exception:
                     felder_layer = _load_felder_layer(csv_path)
                     if felder_layer is not None:
                         project.addMapLayer(felder_layer, False)
@@ -718,6 +710,11 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
                 plugin._reorder_frm_group_layers(frm_group)
             except Exception:
                 pass
+        # Feld-Dropdown sofort setzen (sonst erst beim nächsten Öffnen sichtbar)
+        try:
+            plugin._apply_field_dropdowns()
+        except Exception:
+            pass
     except Exception:
         pass
 

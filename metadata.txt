@@ -2,7 +2,7 @@
 name=LK-Technik Path Planner
 qgisMinimumVersion=3.16
 qgisMaximumVersion=3.99
-version=1.4.0
+version=1.5.0
 author=Florian Köck
 email=florian.koeck@lk-noe.at
 category=Analysis
@@ -27,7 +27,9 @@ about=Combined plugin for ISOXML and John Deere Gen4 import and export.
     Developed by Florian Köck (LK-Technik Mold)
 experimental=False
 deprecated=False
-changelog=1.4.0 - Felder anlegen, abgleichen, umbenennen
+changelog=1.5.0 - Feld-Auswahl per Dropdown
+    - ID-Feld von Feldgrenzen/Fahrspuren/Hindernissen als Value-Relation-Dropdown (zeigt Feldnamen, speichert id).
+    1.4.0 - Felder anlegen, abgleichen, umbenennen
     - Button "Feld hinzufuegen" fuer Felder ohne Grenze.
     - Katalog-Abgleich beim Oeffnen (inkl. IDs aus Fahrspuren/Hindernissen, Auto-ID fuer neue Grenzen).
     - Rechtsklick "Feld umbenennen...".

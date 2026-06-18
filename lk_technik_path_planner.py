@@ -33,7 +33,7 @@ Copyright- und Autorhinweise (Florian Köck, LK-Technik Mold) erhalten bleiben.
 
 Author: Florian Köck
 Institution: LK-Technik Mold
-Version: 1.4.0
+Version: 1.5.0
 Date: 2026-06-18
 """
 
@@ -65,7 +65,7 @@ except Exception:
 from qgis.core import (
     Qgis, QgsProject, QgsVectorLayer, QgsField, QgsFields, QgsFeature, QgsGeometry, QgsPointXY,
     QgsLayerTreeGroup, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsVectorFileWriter,
-    QgsFeatureSink, QgsWkbTypes
+    QgsFeatureSink, QgsWkbTypes, QgsEditorWidgetSetup
 )
 
 def _tr(message: str) -> str:
@@ -1240,6 +1240,31 @@ class LkTechnikPathPlanner:
             project.addMapLayer(new_layer, False)
             parent.insertLayer(0, new_layer)
 
+    def _recreate_felder_layer(self, frm_group: QgsLayerTreeGroup, csv_path: str):
+        """
+        Entfernt den vorhandenen Felder-Layer der Gruppe und lädt ihn frisch aus
+        der (gefüllten) CSV. Notwendig, weil ein delimitedtext-Layer, der anfangs
+        aus einer leeren Datei erzeugt wurde, per reload() die Value-Relation-
+        Quelle nicht zuverlässig aktualisiert. Das Neuladen invalidiert zudem den
+        Cache der Value Relation, sodass das Dropdown sofort die Namen zeigt.
+        """
+        project = QgsProject.instance()
+        old = _find_child_layer(frm_group, FELDER_LAYER_NAME)
+        if old is not None:
+            try:
+                project.removeMapLayer(old.id())
+            except Exception:
+                pass
+        new_layer = _load_felder_layer(csv_path)
+        if new_layer is not None:
+            project.addMapLayer(new_layer, False)
+            frm_group.insertLayer(0, new_layer)
+            try:
+                self._reorder_frm_group_layers(frm_group)
+            except Exception:
+                pass
+        return new_layer
+
     def _sync_all_felder_catalogs(self):
         """
         Gleicht Felder.csv für JEDEN Betrieb mit dem zugehörigen
@@ -1256,6 +1281,79 @@ class LkTechnikPathPlanner:
                     continue
                 try:
                     self._sync_felder_for_group(frm_node)
+                except Exception:
+                    pass
+
+    def _apply_field_dropdowns(self):
+        """
+        Konfiguriert das ID-Feld von Feldgrenzen/Fahrspuren/Hindernissen als
+        Auswahl-Dropdown (Value Relation), das die Feldnamen aus dem Katalog
+        (Felder) anzeigt und die id speichert. So muss man keine IDs kennen.
+        Wird beim Öffnen NACH der Style-Anwendung aufgerufen, da der Style die
+        Editor-Widgets sonst wieder überschreiben würde.
+        """
+        root = QgsProject.instance().layerTreeRoot()
+        for ctr_node in root.children():
+            if not isinstance(ctr_node, QgsLayerTreeGroup):
+                continue
+            for frm_node in ctr_node.children():
+                if not isinstance(frm_node, QgsLayerTreeGroup):
+                    continue
+                try:
+                    self._apply_field_dropdown_for_group(frm_node)
+                except Exception:
+                    pass
+
+    def _apply_field_dropdown_for_group(self, frm_group: QgsLayerTreeGroup):
+        felder = _find_child_layer(frm_group, FELDER_LAYER_NAME)
+        if felder is None:
+            # Altprojekt: Felder-Layer fehlt evtl. -> aus CSV nachladen
+            csv_path = ""
+            for nm in ("Feldgrenzen", "Fahrspuren", "Punkthindernis", "Flaechenhindernis"):
+                lyr = _find_child_layer(frm_group, nm)
+                p = _felder_csv_path_for_layer(lyr) if lyr else ""
+                if p:
+                    csv_path = p
+                    break
+            if csv_path:
+                if not os.path.exists(csv_path):
+                    _write_felder_csv(csv_path, {})
+                new_layer = _load_felder_layer(csv_path)
+                if new_layer is not None:
+                    QgsProject.instance().addMapLayer(new_layer, False)
+                    frm_group.insertLayer(0, new_layer)
+                    felder = new_layer
+        if felder is None:
+            return
+        felder_id = felder.id()
+
+        config = {
+            "Layer": felder_id,
+            "LayerName": FELDER_LAYER_NAME,
+            "LayerSource": felder.publicSource(),
+            "LayerProviderName": felder.providerType(),
+            "Key": "id",
+            "Value": "Name",
+            "AllowNull": True,
+            "AllowMulti": False,
+            "OrderByValue": False,      # nach Anzeigewert (Name) sortieren
+            "NofColumns": 1,
+            "UseCompleter": False,
+            "FilterExpression": "",
+        }
+        setup = QgsEditorWidgetSetup("ValueRelation", config)
+
+        for nm in ("Feldgrenzen", "Fahrspuren", "Punkthindernis", "Flaechenhindernis"):
+            lyr = _find_child_layer(frm_group, nm)
+            if lyr is None:
+                continue
+            idf = _pick_field(_field_map(lyr), "ID")
+            if not idf:
+                continue
+            idx = lyr.fields().indexOf(idf)
+            if idx >= 0:
+                try:
+                    lyr.setEditorWidgetSetup(idx, setup)
                 except Exception:
                     pass
 
@@ -1418,6 +1516,11 @@ class LkTechnikPathPlanner:
                 parent = node.parent()
                 if isinstance(parent, QgsLayerTreeGroup):
                     self._apply_feldgrenzen_color(lyr, parent)
+
+        # NEU: ID-Felder als Feld-Dropdown (Value Relation) konfigurieren.
+        # Muss NACH der Style-Anwendung erfolgen, sonst überschreibt der Style
+        # das Editor-Widget wieder.
+        self._apply_field_dropdowns()
 
         self.dlg.show()
         self.dlg.exec_()
@@ -1643,6 +1746,7 @@ class LkTechnikPathPlanner:
             return
 
         self.dlg.refresh_tree()
+        self._apply_field_dropdowns()
 
         self.iface.messageBar().pushMessage(
             "OK",
@@ -2291,11 +2395,12 @@ class LkTechnikPathPlanner:
                     if fid not in merged or (not merged.get(fid) and nm):
                         merged[fid] = nm
                 _write_felder_csv(csv_path, merged)
-                if isinstance(felder_layer, QgsVectorLayer):
-                    try:
-                        felder_layer.reload()
-                    except Exception:
-                        pass
+                # Felder-Layer FRISCH neu laden (statt nur reload). Der Layer
+                # wurde anfangs aus einer leeren CSV erzeugt; ein bloßes reload
+                # füllt die Value-Relation-Quelle nicht zuverlässig, daher
+                # entfernen + neu laden -> Dropdown zeigt sofort die Namen.
+                if frm_group is not None:
+                    self._recreate_felder_layer(frm_group, csv_path)
             elif isinstance(felder_layer, QgsVectorLayer):
                 # Memory-Variante: Features direkt einfügen
                 feats = []
@@ -2307,6 +2412,11 @@ class LkTechnikPathPlanner:
                 if feats:
                     felder_layer.dataProvider().addFeatures(feats)
                     felder_layer.updateExtents()
+
+        # NEU: Feld-Dropdown (Value Relation) direkt nach dem Import setzen,
+        # damit die Attributtabelle sofort den Feldnamen/Dropdown zeigt und
+        # nicht erst beim nächsten Öffnen des Path Planners.
+        self._apply_field_dropdowns()
 
         self.iface.messageBar().pushMessage("Success", "ISOXML importiert (CTR → FRM → Layer).", level=Qgis.Success, duration=4)
         self.dlg.accept()
@@ -2428,7 +2538,7 @@ class LkTechnikPathPlanner:
             "VersionMajor": "3" if is_v3 else "4",
             "VersionMinor": "0",
             "ManagementSoftwareManufacturer": "LK-Technik Mold",
-            "ManagementSoftwareVersion": "1.4.0",
+            "ManagementSoftwareVersion": "1.5.0",
             "DataTransferOrigin": "1"
         })
 
