@@ -33,8 +33,8 @@ Copyright- und Autorhinweise (Florian Köck, LK-Technik Mold) erhalten bleiben.
 
 Author: Florian Köck
 Institution: LK-Technik Mold
-Version: 1.2.0
-Date: 2026-04-13
+Version: 1.4.0
+Date: 2026-06-18
 """
 
 
@@ -357,6 +357,54 @@ class AddFarmDialog(QDialog):
             return QgsProject.instance().crs()
         return QgsCoordinateReferenceSystem("EPSG:4326")
 
+
+class AddFieldDialog(QDialog):
+    """Dialog zum Anlegen eines Feldes (Felder.csv) ohne Feldgrenze."""
+    def __init__(self, farm_pairs, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Feld hinzufügen")
+        self.setMinimumWidth(420)
+        self._pairs = list(farm_pairs)
+
+        layout = QFormLayout(self)
+
+        self.cmb_farm = QComboBox()
+        for ctr, frm in self._pairs:
+            self.cmb_farm.addItem(f"{ctr} / {frm}")
+
+        self.edit_name = QLineEdit()
+        self.edit_name.setPlaceholderText("z.B. Hausacker")
+
+        layout.addRow("Betrieb:", self.cmb_farm)
+        layout.addRow("Feldname:", self.edit_name)
+
+        hint = QLabel(
+            "Es wird ein Feld ohne Feldgrenze im Katalog (Felder.csv) angelegt.\n"
+            "Die vergebene ID kannst du anschließend den Fahrspuren zuweisen."
+        )
+        hint.setWordWrap(True)
+        layout.addRow(hint)
+
+        btn_row = QHBoxLayout()
+        self.btn_ok = QPushButton("OK")
+        self.btn_cancel = QPushButton("Abbrechen")
+        self.btn_ok.clicked.connect(self.accept)
+        self.btn_cancel.clicked.connect(self.reject)
+        btn_row.addStretch(1)
+        btn_row.addWidget(self.btn_ok)
+        btn_row.addWidget(self.btn_cancel)
+        layout.addRow(btn_row)
+
+    def selected_pair(self):
+        i = self.cmb_farm.currentIndex()
+        if 0 <= i < len(self._pairs):
+            return self._pairs[i]
+        return (None, None)
+
+    def field_name(self):
+        return _norm_name(self.edit_name.text())
+
+
 class ToolboxDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -566,15 +614,18 @@ class ToolboxDialog(QDialog):
         self.tree.setHeaderLabels(["Kunde / Betrieb / Feld"])
         self.tree.setColumnCount(1)
         self.tree.setSelectionMode(QTreeWidget.NoSelection)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.itemChanged.connect(self._on_tree_item_changed)
         v.addWidget(QLabel("Wähle, was exportiert werden soll:"))
         v.addWidget(self.tree, 1)
-        # Buttons: Kunde / Betrieb hinzufügen
+        # Buttons: Kunde / Betrieb / Feld hinzufügen
         add_row = QHBoxLayout()
         self.btn_add_ctr = QPushButton("Kunde hinzufügen")
         self.btn_add_frm = QPushButton("Betrieb hinzufügen")
+        self.btn_add_field = QPushButton("Feld hinzufügen")
         add_row.addWidget(self.btn_add_ctr)
         add_row.addWidget(self.btn_add_frm)
+        add_row.addWidget(self.btn_add_field)
         add_row.addStretch(1)
         v.addLayout(add_row)
 
@@ -1189,6 +1240,154 @@ class LkTechnikPathPlanner:
             project.addMapLayer(new_layer, False)
             parent.insertLayer(0, new_layer)
 
+    def _sync_all_felder_catalogs(self):
+        """
+        Gleicht Felder.csv für JEDEN Betrieb mit dem zugehörigen
+        Feldgrenzen-Layer ab. Wird beim Öffnen des Dialogs aufgerufen –
+        ähnlich wie die Styles – damit neu gezeichnete Felder zuverlässig
+        in den Katalog übernommen werden.
+        """
+        root = QgsProject.instance().layerTreeRoot()
+        for ctr_node in root.children():
+            if not isinstance(ctr_node, QgsLayerTreeGroup):
+                continue
+            for frm_node in ctr_node.children():
+                if not isinstance(frm_node, QgsLayerTreeGroup):
+                    continue
+                try:
+                    self._sync_felder_for_group(frm_node)
+                except Exception:
+                    pass
+
+    def _sync_felder_for_group(self, frm_group: QgsLayerTreeGroup):
+        """
+        Merge -> Felder.csv für einen Betrieb:
+        - vorhandene Katalog-Einträge (Import, auch ohne Grenze) bleiben erhalten
+        - jede Feldgrenze ohne ID bekommt eine neue, eindeutige ID zugewiesen
+        - IDs aus Fahrspuren / Punkthindernis / Flaechenhindernis werden als
+          Felder registriert (so entstehen Felder OHNE Feldgrenze, nur mit Spuren)
+        """
+        poly_layer = _find_child_layer(frm_group, "Feldgrenzen")
+        line_layer = _find_child_layer(frm_group, "Fahrspuren")
+        pt_layer   = _find_child_layer(frm_group, "Punkthindernis")
+        fh_layer   = _find_child_layer(frm_group, "Flaechenhindernis")
+
+        # Felder.csv über irgendeinen datei-basierten Layer ermitteln
+        csv_path = ""
+        for cand in (poly_layer, line_layer, pt_layer, fh_layer):
+            csv_path = _felder_csv_path_for_layer(cand) if cand else ""
+            if csv_path:
+                break
+        if not csv_path:
+            return  # nur Memory-Layer -> kein CSV vorhanden
+
+        rows = _read_felder_csv(csv_path)
+
+        # max_id über Katalog UND alle vorhandenen IDs bestimmen
+        max_id = max(rows.keys()) if rows else 0
+        for lyr in (poly_layer, line_layer, pt_layer, fh_layer):
+            if lyr is None:
+                continue
+            idf = _pick_field(_field_map(lyr), "ID")
+            if not idf:
+                continue
+            for f in lyr.getFeatures():
+                v = f[idf]
+                if not _is_nullish(v):
+                    try:
+                        max_id = max(max_id, int(v))
+                    except Exception:
+                        pass
+
+        changed = False
+
+        # 1) Feldgrenzen: fehlende IDs vergeben + Namen registrieren
+        #    NUR wenn die Ebene NICHT im Bearbeitungsmodus ist. Sonst sind neue
+        #    Objekte noch nicht committet -> Provider-Schreiben würde fehlschlagen
+        #    (OGR-Fehler) und das Feld würde beim späteren Speichern doppelt
+        #    angelegt. Im Edit-Modus übernimmt das Speichern (Commit) bzw. das
+        #    nächste Öffnen die Registrierung.
+        if poly_layer is not None and not poly_layer.isEditable():
+            fmap = _field_map(poly_layer)
+            id_field = _pick_field(fmap, "ID")
+            name_field = _pick_field(fmap, "Name")
+            attr_changes = {}
+            for feat in poly_layer.getFeatures():
+                fid = None
+                if id_field:
+                    v = feat[id_field]
+                    if not _is_nullish(v):
+                        try:
+                            fid = int(v)
+                        except Exception:
+                            fid = None
+                if fid is None:
+                    max_id += 1
+                    fid = max_id
+                    if id_field:
+                        idx = poly_layer.fields().indexOf(id_field)
+                        if idx >= 0:
+                            attr_changes[feat.id()] = {idx: fid}
+                # Name: gefüllter Feldgrenzen-Name wird in den Katalog übernommen.
+                bname = ""
+                if name_field:
+                    nv = feat[name_field]
+                    if not _is_nullish(nv):
+                        bname = str(nv).strip()
+                if bname:
+                    if rows.get(fid) != bname:
+                        rows[fid] = bname
+                        changed = True
+                elif fid not in rows:
+                    rows[fid] = f"Feld {fid}"
+                    changed = True
+
+            if attr_changes:
+                self._felder_guard = True
+                try:
+                    poly_layer.dataProvider().changeAttributeValues(attr_changes)
+                    poly_layer.reload()
+                    poly_layer.triggerRepaint()
+                except Exception:
+                    pass
+                finally:
+                    self._felder_guard = False
+                changed = True
+
+        # 2) Fahrspuren / Hindernisse: vorhandene IDs als Felder registrieren.
+        #    (Kein Auto-Vergeben von IDs – eine Spur ohne ID bleibt unzugeordnet.)
+        for lyr in (line_layer, pt_layer, fh_layer):
+            if lyr is None:
+                continue
+            if lyr.isEditable():
+                continue  # offene Bearbeitung -> erst nach dem Speichern erfassen
+            idf = _pick_field(_field_map(lyr), "ID")
+            if not idf:
+                continue
+            for f in lyr.getFeatures():
+                v = f[idf]
+                if _is_nullish(v):
+                    continue
+                try:
+                    fid = int(v)
+                except Exception:
+                    continue
+                if fid not in rows:
+                    rows[fid] = f"Feld {fid}"
+                    changed = True
+
+        if changed:
+            _write_felder_csv(csv_path, rows)
+
+        # Felder-Layer IMMER sicherstellen – auch wenn sich nichts geändert hat
+        # (wichtig für Altprojekte, in denen der Felder-Layer noch nicht in der
+        # Projektstruktur geladen ist; sonst fehlt die Quelle für das Dropdown).
+        if not os.path.exists(csv_path):
+            _write_felder_csv(csv_path, rows)
+        ref_layer = poly_layer or line_layer or pt_layer or fh_layer
+        if ref_layer is not None:
+            self._reload_felder_for_feldgrenzen(ref_layer, csv_path)
+
     def run(self):
         if self.first_start:
             self.first_start = False
@@ -1198,6 +1397,13 @@ class LkTechnikPathPlanner:
             # Buttons nur EINMAL verbinden:
             self.dlg.btn_add_ctr.clicked.connect(self._ui_add_customer)
             self.dlg.btn_add_frm.clicked.connect(self._ui_add_farm)
+            self.dlg.btn_add_field.clicked.connect(self._ui_add_field)
+            self.dlg.tree.customContextMenuRequested.connect(self._on_tree_context_menu)
+
+        # NEU: Felder.csv beim Öffnen mit den Feldgrenzen abgleichen.
+        # Dadurch landen neu gezeichnete Felder zuverlässig im Katalog,
+        # auch wenn das Commit-Signal nicht gegriffen hat.
+        self._sync_all_felder_catalogs()
 
         self.dlg.refresh_tree()
         root = QgsProject.instance().layerTreeRoot()
@@ -1443,6 +1649,219 @@ class LkTechnikPathPlanner:
             f"Betrieb '{frm_name}' mit Layern erstellt ({target_crs.authid()}).",
             level=Qgis.Success,
             duration=4
+        )
+
+    def _ui_add_field(self):
+        """
+        Legt ein Feld ohne Feldgrenze direkt im Katalog (Felder.csv) an.
+        So lassen sich Felder erstellen, die später NUR Fahrspuren haben.
+        """
+        root = QgsProject.instance().layerTreeRoot()
+
+        pairs = []
+        pair_groups = {}
+        for ctr in root.children():
+            if not isinstance(ctr, QgsLayerTreeGroup):
+                continue
+            for frm in ctr.children():
+                if not isinstance(frm, QgsLayerTreeGroup):
+                    continue
+                key = (ctr.name(), frm.name())
+                pairs.append(key)
+                pair_groups[key] = frm
+
+        if not pairs:
+            QMessageBox.information(
+                self.iface.mainWindow(),
+                "Hinweis",
+                "Es gibt noch keinen Betrieb. Bitte zuerst einen Betrieb anlegen."
+            )
+            return
+
+        dlg = AddFieldDialog(pairs, self.iface.mainWindow())
+        if dlg.exec_() != QDialog.Accepted:
+            return
+
+        ctr_name, frm_name = dlg.selected_pair()
+        name = dlg.field_name()
+        if not ctr_name or not frm_name:
+            return
+
+        frm_group = pair_groups.get((ctr_name, frm_name))
+        if frm_group is None:
+            return
+
+        # Felder.csv-Pfad über irgendeinen datei-basierten Layer der Gruppe ermitteln
+        csv_path = ""
+        for nm in ("Feldgrenzen", "Fahrspuren", "Punkthindernis", "Flaechenhindernis"):
+            lyr = _find_child_layer(frm_group, nm)
+            p = _felder_csv_path_for_layer(lyr) if lyr else ""
+            if p:
+                csv_path = p
+                break
+
+        if not csv_path:
+            QMessageBox.warning(
+                self.iface.mainWindow(),
+                "Nicht möglich",
+                "Die Layer dieses Betriebs sind noch temporär (nicht gespeichert).\n"
+                "Bitte zuerst dauerhaft als GeoPackage speichern, dann erneut versuchen."
+            )
+            return
+
+        rows = _read_felder_csv(csv_path)
+
+        # nächste freie ID über Katalog + alle Layer bestimmen
+        max_id = max(rows.keys()) if rows else 0
+        for nm in ("Feldgrenzen", "Fahrspuren", "Punkthindernis", "Flaechenhindernis"):
+            lyr = _find_child_layer(frm_group, nm)
+            if lyr is None:
+                continue
+            idf = _pick_field(_field_map(lyr), "ID")
+            if not idf:
+                continue
+            for f in lyr.getFeatures():
+                v = f[idf]
+                if not _is_nullish(v):
+                    try:
+                        max_id = max(max_id, int(v))
+                    except Exception:
+                        pass
+
+        new_id = max_id + 1
+        if not name:
+            name = f"Feld {new_id}"
+
+        rows[new_id] = name
+        _write_felder_csv(csv_path, rows)
+
+        ref_layer = _find_child_layer(frm_group, "Feldgrenzen") or _find_child_layer(frm_group, "Fahrspuren") \
+            or _find_child_layer(frm_group, "Punkthindernis") or _find_child_layer(frm_group, "Flaechenhindernis")
+        if ref_layer is not None:
+            self._reload_felder_for_feldgrenzen(ref_layer, csv_path)
+
+        self.dlg.refresh_tree()
+        self.iface.messageBar().pushMessage(
+            "OK",
+            f"Feld '{name}' angelegt (ID {new_id}). Weise diese ID den Fahrspuren zu.",
+            level=Qgis.Success,
+            duration=7
+        )
+
+    def _on_tree_context_menu(self, pos):
+        """Rechtsklick auf ein Feld im Export-Baum -> Umbenennen / Löschen."""
+        tree = self.dlg.tree
+        item = tree.itemAt(pos)
+        if item is None:
+            return
+        fid = item.data(0, Qt.UserRole)
+        parent = item.parent()
+        # nur Feld-Blätter haben eine ID und liegen unter Betrieb unter Kunde
+        if fid is None or parent is None or parent.parent() is None:
+            return
+        frm_name = parent.text(0)
+        ctr_name = parent.parent().text(0)
+
+        menu = QMenu()
+        act_rename = menu.addAction("Feld umbenennen…")
+        chosen = menu.exec_(tree.viewport().mapToGlobal(pos))
+        if chosen == act_rename:
+            try:
+                self._rename_field(ctr_name, frm_name, int(fid), item.text(0))
+            except Exception as e:
+                self.iface.messageBar().pushMessage(
+                    "Fehler", f"Umbenennen fehlgeschlagen: {e}", level=Qgis.Critical, duration=6
+                )
+
+    def _rename_field(self, ctr_name: str, frm_name: str, field_id: int, current_name: str):
+        """
+        Benennt ein Feld um: schreibt Felder.csv und gleicht – falls vorhanden –
+        das Name-Attribut der zugehörigen Feldgrenze(n) an.
+        Funktioniert auch für Felder OHNE Feldgrenze.
+        """
+        new_name, ok = QInputDialog.getText(
+            self.iface.mainWindow(),
+            "Feld umbenennen",
+            f"Neuer Name für Feld (ID {field_id}):",
+            text=current_name or ""
+        )
+        if not ok:
+            return
+        new_name = _norm_name(new_name)
+        if not new_name:
+            return
+
+        # Betriebsgruppe finden
+        root = QgsProject.instance().layerTreeRoot()
+        frm_group = None
+        for ctr in root.children():
+            if isinstance(ctr, QgsLayerTreeGroup) and ctr.name() == ctr_name:
+                for frm in ctr.children():
+                    if isinstance(frm, QgsLayerTreeGroup) and frm.name() == frm_name:
+                        frm_group = frm
+                        break
+                break
+        if frm_group is None:
+            return
+
+        # Felder.csv-Pfad ermitteln
+        csv_path = ""
+        for nm in ("Feldgrenzen", "Fahrspuren", "Punkthindernis", "Flaechenhindernis"):
+            lyr = _find_child_layer(frm_group, nm)
+            p = _felder_csv_path_for_layer(lyr) if lyr else ""
+            if p:
+                csv_path = p
+                break
+        if not csv_path:
+            QMessageBox.warning(
+                self.iface.mainWindow(),
+                "Nicht möglich",
+                "Die Layer dieses Betriebs sind noch temporär (nicht gespeichert)."
+            )
+            return
+
+        rows = _read_felder_csv(csv_path)
+        rows[field_id] = new_name
+        _write_felder_csv(csv_path, rows)
+
+        # Name-Attribut der Feldgrenze(n) mit dieser ID angleichen
+        poly = _find_child_layer(frm_group, "Feldgrenzen")
+        if poly is not None:
+            pmap = _field_map(poly)
+            idf = _pick_field(pmap, "ID")
+            namef = _pick_field(pmap, "Name")
+            if idf and namef:
+                nidx = poly.fields().indexOf(namef)
+                changes = {}
+                for f in poly.getFeatures():
+                    v = f[idf]
+                    if _is_nullish(v):
+                        continue
+                    try:
+                        if int(v) == int(field_id):
+                            changes[f.id()] = {nidx: new_name}
+                    except Exception:
+                        continue
+                if changes and nidx >= 0:
+                    self._felder_guard = True
+                    try:
+                        poly.dataProvider().changeAttributeValues(changes)
+                        poly.reload()
+                        poly.triggerRepaint()
+                    except Exception:
+                        pass
+                    finally:
+                        self._felder_guard = False
+
+        ref_layer = _find_child_layer(frm_group, "Feldgrenzen") \
+            or _find_child_layer(frm_group, "Fahrspuren") \
+            or _find_child_layer(frm_group, "Punkthindernis") or _find_child_layer(frm_group, "Flaechenhindernis")
+        if ref_layer is not None:
+            self._reload_felder_for_feldgrenzen(ref_layer, csv_path)
+
+        self.dlg.refresh_tree()
+        self.iface.messageBar().pushMessage(
+            "OK", f"Feld (ID {field_id}) umbenannt in '{new_name}'.", level=Qgis.Success, duration=5
         )
 
     # ------------------------- IMPORT -------------------------
@@ -2009,7 +2428,7 @@ class LkTechnikPathPlanner:
             "VersionMajor": "3" if is_v3 else "4",
             "VersionMinor": "0",
             "ManagementSoftwareManufacturer": "LK-Technik Mold",
-            "ManagementSoftwareVersion": "1.3.0",
+            "ManagementSoftwareVersion": "1.4.0",
             "DataTransferOrigin": "1"
         })
 
