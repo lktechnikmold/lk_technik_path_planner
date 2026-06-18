@@ -38,10 +38,10 @@ Date: 2026-04-13
 """
 
 
-import os, os.path, math, xml.etree.ElementTree as ET, xml.dom.minidom
+import os, os.path, math, csv, xml.etree.ElementTree as ET, xml.dom.minidom
 import processing
 
-from qgis.PyQt.QtCore import Qt, QCoreApplication, QVariant
+from qgis.PyQt.QtCore import Qt, QCoreApplication, QVariant, QUrl, QUrlQuery
 from qgis.PyQt.QtGui import QIcon, QPixmap, QColor
 try:
     from . import resources
@@ -50,7 +50,7 @@ except Exception:
 from qgis.PyQt.QtWidgets import (
     QAction, QDialog, QFileDialog, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem,
     QPushButton, QLineEdit, QLabel, QGroupBox, QCheckBox, QRadioButton, QStackedWidget,
-    QFormLayout, QInputDialog, QMessageBox, QWidget, QToolButton, QDoubleSpinBox, QButtonGroup, QComboBox
+    QFormLayout, QInputDialog, QMessageBox, QWidget, QToolButton, QDoubleSpinBox, QButtonGroup, QComboBox, QMenu
 )
 try:
     from .john_deere_gen4_export import export_john_deere_gen4
@@ -110,6 +110,196 @@ def _feat_val(feat: QgsFeature, fmap: dict, *candidates: str, default=None):
         return feat[fn]
     except Exception:
         return default
+
+
+# ============================================================
+# NEU: Felder-Katalog (Felder.csv)
+# ------------------------------------------------------------
+# Felder.csv ist die "Source of Truth" für die Felder eines Betriebs.
+# Spalten: id;Name
+# Jeder Eintrag definiert ein Feld; Feldgrenzen, Fahrspuren und
+# Hindernisse referenzieren das Feld über die Spalte ID == id.
+# Dadurch können Felder ohne Feldgrenze und mehrere Feldgrenzen pro
+# Feld existieren, ohne beim Export verloren zu gehen.
+# ============================================================
+
+FELDER_LAYER_NAME = "Felder"
+FELDER_CSV_NAME = "Felder.csv"
+FELDER_CSV_DELIM = ";"  # semikolon = Excel-freundlich (v.a. unter DE-Locale)
+
+
+def _felder_csv_path_in_dir(base_dir: str) -> str:
+    """Pfad zur Felder.csv in einem Betriebsordner."""
+    if not base_dir:
+        return ""
+    return os.path.join(base_dir, FELDER_CSV_NAME)
+
+
+def _felder_csv_path_for_layer(layer: QgsVectorLayer) -> str:
+    """
+    Ermittelt die Felder.csv neben einem datei-basierten Layer
+    (z.B. Feldgrenzen.gpkg). Memory-Layer liefern "".
+    """
+    if not isinstance(layer, QgsVectorLayer):
+        return ""
+    try:
+        if layer.providerType() != "ogr":
+            return ""
+        src = layer.source() or ""
+        # "….gpkg|layername=Feldgrenzen" -> Pfad vor dem |
+        gpkg_path = src.split("|", 1)[0].strip()
+        if not gpkg_path:
+            return ""
+        base_dir = os.path.dirname(gpkg_path)
+        if not base_dir:
+            return ""
+        return _felder_csv_path_in_dir(base_dir)
+    except Exception:
+        return ""
+
+
+def _read_felder_csv(csv_path: str) -> dict:
+    """
+    Liest Felder.csv und liefert {int_id: name}.
+    Robust gegenüber fehlender Datei / abweichenden Spaltennamen / Trennzeichen.
+    """
+    rows = {}
+    if not csv_path or not os.path.exists(csv_path):
+        return rows
+    try:
+        with open(csv_path, "r", encoding="utf-8-sig", newline="") as fh:
+            sample = fh.read(4096)
+            fh.seek(0)
+            delim = FELDER_CSV_DELIM
+            try:
+                dialect = csv.Sniffer().sniff(sample, delimiters=";,\t")
+                delim = dialect.delimiter
+            except Exception:
+                pass
+            reader = csv.reader(fh, delimiter=delim)
+            header = next(reader, None)
+            if header is None:
+                return rows
+            hmap = {str(h).strip().lower(): i for i, h in enumerate(header)}
+            id_idx = hmap.get("id", 0)
+            name_idx = hmap.get("name", 1 if len(header) > 1 else 0)
+            for rec in reader:
+                if not rec:
+                    continue
+                try:
+                    raw_id = rec[id_idx] if id_idx < len(rec) else ""
+                    fid = int(str(raw_id).strip())
+                except Exception:
+                    continue
+                name = rec[name_idx].strip() if name_idx < len(rec) else ""
+                rows[fid] = name
+    except Exception:
+        pass
+    return rows
+
+
+def _write_felder_csv(csv_path: str, rows: dict) -> bool:
+    """
+    Schreibt {id: name} nach Felder.csv (Header: id;Name), sortiert nach id.
+    """
+    if not csv_path:
+        return False
+    try:
+        os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+        with open(csv_path, "w", encoding="utf-8-sig", newline="") as fh:
+            writer = csv.writer(fh, delimiter=FELDER_CSV_DELIM)
+            writer.writerow(["id", "Name"])
+            for fid in sorted(rows.keys()):
+                writer.writerow([fid, rows.get(fid, "")])
+        return True
+    except Exception:
+        return False
+
+
+def _felder_layer_uri(csv_path: str) -> str:
+    """Baut die delimitedtext-URI für Felder.csv (ohne Geometrie)."""
+    url = QUrl.fromLocalFile(csv_path)
+    q = QUrlQuery()
+    q.addQueryItem("type", "csv")
+    q.addQueryItem("delimiter", FELDER_CSV_DELIM)
+    q.addQueryItem("detectTypes", "yes")
+    q.addQueryItem("geomType", "none")
+    q.addQueryItem("watchFile", "no")
+    url.setQuery(q)
+    return url.toString()
+
+
+def _load_felder_layer(csv_path: str) -> QgsVectorLayer:
+    """Lädt Felder.csv als (read-only) delimitedtext-Layer namens 'Felder'."""
+    if not csv_path:
+        return None
+    lyr = QgsVectorLayer(_felder_layer_uri(csv_path), FELDER_LAYER_NAME, "delimitedtext")
+    return lyr if lyr.isValid() else None
+
+
+def _felder_rows_from_layer(felder_layer: QgsVectorLayer) -> dict:
+    """Liest {id: name} direkt aus einem geladenen Felder-Layer."""
+    rows = {}
+    if not isinstance(felder_layer, QgsVectorLayer) or not felder_layer.isValid():
+        return rows
+    fmap = _field_map(felder_layer)
+    id_f = _pick_field(fmap, "id", "ID")
+    name_f = _pick_field(fmap, "Name", "name")
+    for feat in felder_layer.getFeatures():
+        try:
+            fid = int(feat[id_f]) if id_f else None
+        except Exception:
+            fid = None
+        if fid is None:
+            continue
+        rows[fid] = str(feat[name_f]).strip() if name_f else ""
+    return rows
+
+
+def _find_child_layer(group: QgsLayerTreeGroup, name: str) -> QgsVectorLayer:
+    """Findet einen direkten Kind-Layer einer Gruppe anhand des Namens."""
+    if not isinstance(group, QgsLayerTreeGroup):
+        return None
+    for node in group.children():
+        try:
+            lyr = node.layer()
+        except Exception:
+            lyr = None
+        if isinstance(lyr, QgsVectorLayer) and lyr.name() == name:
+            return lyr
+    return None
+
+
+def _field_catalog_for_frm(frm_group: QgsLayerTreeGroup) -> list:
+    """
+    Liefert den Feld-Katalog eines Betriebs als sortierte Liste [(id, name), ...].
+
+    Primärquelle: Felder-Layer (Felder.csv).
+    Fallback / Ergänzung: IDs aus dem Feldgrenzen-Layer (für Altprojekte ohne
+    Felder.csv bzw. falls eine Feldgrenze noch nicht registriert wurde).
+    """
+    catalog = {}
+
+    felder_layer = _find_child_layer(frm_group, FELDER_LAYER_NAME)
+    if felder_layer is not None:
+        catalog.update(_felder_rows_from_layer(felder_layer))
+
+    # Ergänzen/Fallback aus Feldgrenzen (ohne vorhandene Namen zu überschreiben)
+    poly_layer = _find_child_layer(frm_group, "Feldgrenzen")
+    if poly_layer is not None:
+        fmap = _field_map(poly_layer)
+        id_f = _pick_field(fmap, "ID")
+        name_f = _pick_field(fmap, "Name")
+        for feat in poly_layer.getFeatures():
+            try:
+                fid = int(feat[id_f]) if id_f else int(feat.id())
+            except Exception:
+                continue
+            if fid not in catalog or not catalog.get(fid):
+                catalog[fid] = (str(feat[name_f]).strip() if name_f else "") or catalog.get(fid, "")
+
+    return [(fid, catalog[fid]) for fid in sorted(catalog.keys())]
+
 
 class AddFarmDialog(QDialog):
     def __init__(self, customers, parent=None):
@@ -373,7 +563,7 @@ class ToolboxDialog(QDialog):
 
         # CTR→FRM→Felder tree
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Kunde / Betrieb / Feld (Feldgrenzen)"])
+        self.tree.setHeaderLabels(["Kunde / Betrieb / Feld"])
         self.tree.setColumnCount(1)
         self.tree.setSelectionMode(QTreeWidget.NoSelection)
         self.tree.itemChanged.connect(self._on_tree_item_changed)
@@ -469,33 +659,16 @@ class ToolboxDialog(QDialog):
                 frm_item.setFlags(frm_item.flags() | Qt.ItemIsUserCheckable)
                 frm_item.setCheckState(0, Qt.Checked)
                 ctr_item.addChild(frm_item)
-                # find Feldgrenzen
-                poly_layer = None
-                for child in frm_node.children():
-                    try:
-                        lyr = child.layer()
-                    except Exception:
-                        lyr = None
-                    if isinstance(lyr, QgsVectorLayer) and lyr.name() == "Feldgrenzen":
-                        poly_layer = lyr
-                        break
-                if poly_layer is None:
+                # NEU: Felder aus dem Katalog (Felder.csv) statt nur aus Feldgrenzen.
+                # Dadurch erscheinen auch Felder ohne Feldgrenze (z.B. nur Fahrspuren).
+                catalog = _field_catalog_for_frm(frm_node)
+                if not catalog:
                     continue
-                fmap = _field_map(poly_layer)
-                name_field = _pick_field(fmap, "Name")
-                id_field   = _pick_field(fmap, "ID")
 
-                for feat in poly_layer.getFeatures():
-                    label = str(feat[name_field]) if name_field else str(feat.id())
+                for stored_id, label_name in catalog:
+                    label = label_name if label_name else str(stored_id)
                     item = QTreeWidgetItem([label])
-
-                    stored_id = feat[id_field] if id_field else feat.id()
-                    try:
-                        stored_id = int(stored_id)
-                    except Exception:
-                        stored_id = int(feat.id())
-
-                    item.setData(0, Qt.UserRole, stored_id)
+                    item.setData(0, Qt.UserRole, int(stored_id))
                     item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
                     item.setCheckState(0, Qt.Checked)
                     frm_item.addChild(item)
@@ -616,6 +789,9 @@ class LkTechnikPathPlanner:
         self.actions = []
         self.menu = _tr('&LK-Technik Path Planner')
         self.first_start = True
+        # NEU: Felder.csv-Automatik
+        self._wired_feldgrenzen = set()   # Layer-IDs mit verbundenem Commit-Signal
+        self._felder_guard = False        # Re-Entrancy-Schutz beim Zurückschreiben der ID
 
     def tr(self, m):
         return _tr(m)
@@ -791,6 +967,7 @@ class LkTechnikPathPlanner:
             return
 
         desired_order = [
+            "Felder",
             "Punkthindernis",
             "Flaechenhindernis",
             "Fahrspuren",
@@ -834,10 +1011,183 @@ class LkTechnikPathPlanner:
                         callback=self.run,
                         parent=self.iface.mainWindow())
 
+        # NEU: Neu hinzugefügte Feldgrenzen-Layer automatisch mit der
+        # Felder.csv-Automatik verbinden (deckt Import, Betrieb-anlegen und
+        # das erneute Öffnen gespeicherter Projekte ab).
+        try:
+            QgsProject.instance().layersAdded.connect(self._on_layers_added)
+        except Exception:
+            pass
+        # bereits geladene Layer (Plugin nach Projektöffnung aktiviert)
+        try:
+            self._on_layers_added(list(QgsProject.instance().mapLayers().values()))
+        except Exception:
+            pass
+
     def unload(self):
         for a in self.actions:
             self.iface.removeToolBarIcon(a)
             self.iface.removePluginMenu(self.menu, a)
+        try:
+            QgsProject.instance().layersAdded.disconnect(self._on_layers_added)
+        except Exception:
+            pass
+
+    # ------------------- NEU: Felder.csv-Automatik -------------------
+    def _on_layers_added(self, layers):
+        for lyr in layers:
+            try:
+                if isinstance(lyr, QgsVectorLayer) and lyr.name() == "Feldgrenzen":
+                    self._wire_feldgrenzen_layer(lyr)
+            except Exception:
+                pass
+
+    def _wire_feldgrenzen_layer(self, layer: QgsVectorLayer):
+        """Verbindet das Commit-Signal eines Feldgrenzen-Layers (einmalig)."""
+        try:
+            lid = layer.id()
+        except Exception:
+            return
+        if lid in self._wired_feldgrenzen:
+            return
+        # nur datei-basierte Layer haben eine zugehörige Felder.csv
+        if not _felder_csv_path_for_layer(layer):
+            return
+        try:
+            layer.committedFeaturesAdded.connect(self._on_feldgrenzen_committed)
+            self._wired_feldgrenzen.add(lid)
+        except Exception:
+            pass
+
+    def _on_feldgrenzen_committed(self, layer_id, added_features):
+        """
+        Wird ausgelöst, sobald neu gezeichnete Feldgrenzen gespeichert werden.
+        Legt für jede neue Grenze einen Eintrag in Felder.csv an und vergibt
+        fehlende IDs automatisch.
+        """
+        if self._felder_guard:
+            return
+        layer = QgsProject.instance().mapLayer(layer_id)
+        if not isinstance(layer, QgsVectorLayer):
+            return
+        csv_path = _felder_csv_path_for_layer(layer)
+        if not csv_path:
+            return
+
+        fmap = _field_map(layer)
+        id_field = _pick_field(fmap, "ID")
+        name_field = _pick_field(fmap, "Name")
+
+        rows = _read_felder_csv(csv_path)
+
+        # nächste freie ID aus Katalog UND vorhandenen Feldgrenzen ableiten
+        max_id = max(rows.keys()) if rows else 0
+        try:
+            for feat in layer.getFeatures():
+                v = feat[id_field] if id_field else None
+                if not _is_nullish(v):
+                    max_id = max(max_id, int(v))
+        except Exception:
+            pass
+
+        attr_changes = {}        # fid -> {attr_index: value}
+        pending_new = []         # (fid, name) für NEU vergebene IDs
+        changed = False
+
+        for feat in added_features:
+            # vorhandene ID lesen
+            fid = None
+            if id_field:
+                try:
+                    raw = feat[id_field]
+                    if not _is_nullish(raw):
+                        fid = int(raw)
+                except Exception:
+                    fid = None
+
+            # Name bestimmen
+            name = ""
+            if name_field:
+                try:
+                    nv = feat[name_field]
+                    if not _is_nullish(nv):
+                        name = str(nv).strip()
+                except Exception:
+                    name = ""
+
+            if fid is not None:
+                # bereits zugeordnetes Feld -> direkt registrieren
+                nm = name or f"Feld {fid}"
+                if fid not in rows or not rows.get(fid):
+                    rows[fid] = nm
+                    changed = True
+            else:
+                # neue ID vergeben; Eintrag aber ERST nach erfolgreichem
+                # Zurückschreiben anlegen (sonst Doppel-Anlage über den Sync).
+                max_id += 1
+                fid = max_id
+                nm = name or f"Feld {fid}"
+                idx = layer.fields().indexOf(id_field) if id_field else -1
+                if idx >= 0:
+                    attr_changes[feat.id()] = {idx: fid}
+                    pending_new.append((fid, nm))
+
+        # IDs in die Feldgrenzen zurückschreiben (Provider-Ebene, ohne neues Commit-Signal)
+        if attr_changes:
+            ok = False
+            self._felder_guard = True
+            try:
+                ok = bool(layer.dataProvider().changeAttributeValues(attr_changes))
+                layer.reload()
+                layer.triggerRepaint()
+            except Exception:
+                ok = False
+            finally:
+                self._felder_guard = False
+
+            if ok:
+                for fid, nm in pending_new:
+                    if fid not in rows or not rows.get(fid):
+                        rows[fid] = nm
+                        changed = True
+            # bei Fehlschlag: KEINE Katalogzeile -> der nächste Sync (Ebene dann
+            # nicht mehr im Edit-Modus) registriert das Feld genau einmal.
+
+        if not changed:
+            return
+
+        _write_felder_csv(csv_path, rows)
+        self._reload_felder_for_feldgrenzen(layer, csv_path)
+
+        # Auswahlbaum aktualisieren, falls Dialog offen
+        try:
+            if getattr(self, "dlg", None) is not None:
+                self.dlg.refresh_tree()
+        except Exception:
+            pass
+
+    def _reload_felder_for_feldgrenzen(self, feldgrenzen_layer: QgsVectorLayer, csv_path: str):
+        """Lädt den Felder-Layer der zugehörigen Gruppe neu (oder legt ihn an)."""
+        project = QgsProject.instance()
+        node = project.layerTreeRoot().findLayer(feldgrenzen_layer.id())
+        parent = node.parent() if node is not None else None
+        if not isinstance(parent, QgsLayerTreeGroup):
+            return
+
+        felder_layer = _find_child_layer(parent, FELDER_LAYER_NAME)
+        if felder_layer is not None:
+            try:
+                felder_layer.reload()
+                felder_layer.triggerRepaint()
+            except Exception:
+                pass
+            return
+
+        # Felder-Layer existiert noch nicht (Altprojekt) -> anlegen
+        new_layer = _load_felder_layer(csv_path)
+        if new_layer is not None:
+            project.addMapLayer(new_layer, False)
+            parent.insertLayer(0, new_layer)
 
     def run(self):
         if self.first_start:
@@ -1014,7 +1364,18 @@ class LkTechnikPathPlanner:
             project.addMapLayer(lyr, False)
             frm_group.addLayer(lyr)
             self._apply_predefined_style(lyr)
-            self._reorder_frm_group_layers(frm_group)
+
+        # 5) Felder.csv (Feld-Katalog) – NEU
+        if FELDER_LAYER_NAME not in existing_names:
+            csv_path = _felder_csv_path_in_dir(target_dir)
+            if not os.path.exists(csv_path):
+                _write_felder_csv(csv_path, {})  # leere Datei mit Header
+            felder_layer = _load_felder_layer(csv_path)
+            if felder_layer is not None:
+                project.addMapLayer(felder_layer, False)
+                frm_group.addLayer(felder_layer)
+
+        self._reorder_frm_group_layers(frm_group)
 
     def _ui_add_customer(self):
         name, ok = QInputDialog.getText(self.iface.mainWindow(), "Kunde hinzufügen", "Kundenname:")
@@ -1203,6 +1564,10 @@ class LkTechnikPathPlanner:
         project = QgsProject.instance()
         per_frm_layers = {}
         per_frm_groups = {}
+        # NEU: Felder-Katalog je Betrieb
+        per_frm_felder_rows = {}    # key -> {id: name}
+        per_frm_felder_csv = {}     # key -> csv_pfad oder None (memory)
+        per_frm_felder_layer = {}   # key -> Felder-Layer (delimitedtext oder memory)
 
         def _ensure_hierarchy(ctr_name: str, frm_name: str) -> QgsLayerTreeGroup:
             root_g = project.layerTreeRoot()
@@ -1294,7 +1659,7 @@ class LkTechnikPathPlanner:
 
             # Wenn bereits existiert -> zusammenführen (gleiches Layer-Set wiederverwenden)
             if key in per_frm_layers:
-                return per_frm_layers[key], per_frm_groups[key]
+                return per_frm_layers[key], per_frm_groups[key], key
 
             # sonst neu anlegen
             frm_group = _ensure_hierarchy(ctr_name, frm_name)
@@ -1308,9 +1673,35 @@ class LkTechnikPathPlanner:
 
             layers = _persist_frm_layers(layers, ctr_name, frm_name, frm_group)
 
+            # NEU: Felder-Katalog (Felder.csv) für diesen Betrieb vorbereiten
+            per_frm_felder_rows.setdefault(key, {})
+            if out_dir:
+                base = os.path.join(out_dir, _safe(ctr_name), _safe(frm_name))
+                csv_path = _felder_csv_path_in_dir(base)
+                if not os.path.exists(csv_path):
+                    _write_felder_csv(csv_path, {})
+                per_frm_felder_csv[key] = csv_path
+                felder_layer = _load_felder_layer(csv_path)
+                if felder_layer is not None:
+                    project.addMapLayer(felder_layer, False)
+                    frm_group.addLayer(felder_layer)
+                    per_frm_felder_layer[key] = felder_layer
+            else:
+                # Memory-Import (kein Zielordner): geometrieloser Felder-Layer
+                per_frm_felder_csv[key] = None
+                mem_felder = QgsVectorLayer("None", FELDER_LAYER_NAME, "memory")
+                dpf = mem_felder.dataProvider()
+                dpf.addAttributes([QgsField("id", QVariant.Int), QgsField("Name", QVariant.String)])
+                mem_felder.updateFields()
+                project.addMapLayer(mem_felder, False)
+                frm_group.addLayer(mem_felder)
+                per_frm_felder_layer[key] = mem_felder
+
+            self._reorder_frm_group_layers(frm_group)
+
             per_frm_layers[key] = layers
             per_frm_groups[key] = frm_group
-            return layers, frm_group
+            return layers, frm_group, key
 
         # PFDs
         for pfd in root.findall('.//PFD'):
@@ -1351,7 +1742,14 @@ class LkTechnikPathPlanner:
             else:
                 ctr_name_hint = ctr_map.get(ctr_ref_from_pfd, ctr_ref_from_pfd or "Unbenannter Kunde")
 
-            frm_layers, _grp = _ensure_frm(frm_ref or "__UNBENANNT_FRM__", ctr_name_hint)
+            frm_layers, _grp, _frm_key = _ensure_frm(frm_ref or "__UNBENANNT_FRM__", ctr_name_hint)
+
+            # NEU: jedes Feld (PFD) im Katalog registrieren – auch ohne Feldgrenze.
+            # Vorhandenen, nicht-leeren Namen nicht durch einen leeren überschreiben.
+            _cur_rows = per_frm_felder_rows.setdefault(_frm_key, {})
+            _new_name = pfd_name or ""
+            if numeric_id not in _cur_rows or (not _cur_rows.get(numeric_id) and _new_name):
+                _cur_rows[numeric_id] = _new_name
 
             field_layer = frm_layers["Feldgrenzen"]; line_layer = frm_layers["Fahrspuren"]
             point_layer = frm_layers["Punkthindernis"]; area_layer = frm_layers["Flaechenhindernis"]
@@ -1461,6 +1859,35 @@ class LkTechnikPathPlanner:
         for layers in per_frm_layers.values():
             for lyr in layers.values():
                 lyr.updateExtents()
+
+        # NEU: Felder-Katalog je Betrieb schreiben / füllen
+        for key, rows in per_frm_felder_rows.items():
+            csv_path = per_frm_felder_csv.get(key)
+            felder_layer = per_frm_felder_layer.get(key)
+            frm_group = per_frm_groups.get(key)
+            if csv_path:
+                # bestehende Einträge (z.B. manuell) erhalten, neue ergänzen
+                merged = _read_felder_csv(csv_path)
+                for fid, nm in rows.items():
+                    if fid not in merged or (not merged.get(fid) and nm):
+                        merged[fid] = nm
+                _write_felder_csv(csv_path, merged)
+                if isinstance(felder_layer, QgsVectorLayer):
+                    try:
+                        felder_layer.reload()
+                    except Exception:
+                        pass
+            elif isinstance(felder_layer, QgsVectorLayer):
+                # Memory-Variante: Features direkt einfügen
+                feats = []
+                for fid in sorted(rows.keys()):
+                    f = QgsFeature(felder_layer.fields())
+                    f.setAttribute("id", int(fid))
+                    f.setAttribute("Name", rows.get(fid, ""))
+                    feats.append(f)
+                if feats:
+                    felder_layer.dataProvider().addFeatures(feats)
+                    felder_layer.updateExtents()
 
         self.iface.messageBar().pushMessage("Success", "ISOXML importiert (CTR → FRM → Layer).", level=Qgis.Success, duration=4)
         self.dlg.accept()
@@ -1582,7 +2009,7 @@ class LkTechnikPathPlanner:
             "VersionMajor": "3" if is_v3 else "4",
             "VersionMinor": "0",
             "ManagementSoftwareManufacturer": "LK-Technik Mold",
-            "ManagementSoftwareVersion": "1.2.0",
+            "ManagementSoftwareVersion": "1.3.0",
             "DataTransferOrigin": "1"
         })
 
@@ -1669,7 +2096,10 @@ class LkTechnikPathPlanner:
                 fh_layer = _find_child_layer_by_name(frm_group, "Flaechenhindernis")
 
                 if not polygon_layer:
-                    continue
+                    # NEU: ohne Feldgrenzen-Layer nur überspringen, wenn auch
+                    # kein Feld-Katalog (Felder.csv) vorhanden ist.
+                    if not _field_catalog_for_frm(frm_group):
+                        continue
 
                 #Transform to WGS84 for Export
                 wgs84 = QgsCoordinateReferenceSystem("EPSG:4326")
@@ -2302,23 +2732,51 @@ class LkTechnikPathPlanner:
 
                 field_ids_filter = selected[ctr_name][frm_name]
 
-                poly_fmap = _field_map(polygon_layer)
+                poly_fmap = _field_map(polygon_layer) if polygon_layer else {}
                 id_field   = _pick_field(poly_fmap, "ID")
                 name_field = _pick_field(poly_fmap, "Name")
                 area_field = _pick_field(poly_fmap, "Flaeche")
 
-                for field_feature in polygon_layer.getFeatures():
-                    raw_id = field_feature[id_field] if id_field else field_feature.id()
-                    try:
-                        field_id = int(raw_id)
-                    except Exception:
-                        field_id = int(field_feature.id())
+                # NEU: Export läuft über den Feld-Katalog (Felder.csv) statt über
+                # die Feldgrenzen. Dadurch werden auch Felder OHNE Feldgrenze
+                # exportiert; mehrere Feldgrenzen pro Feld sind möglich.
+                catalog = _field_catalog_for_frm(frm_group)
+                if not catalog:
+                    continue
 
+                # Feldgrenzen je Feld-ID gruppieren (0..n)
+                boundary_by_id = {}
+                if polygon_layer is not None:
+                    for _bf in polygon_layer.getFeatures():
+                        try:
+                            _bid = int(_bf[id_field]) if id_field else int(_bf.id())
+                        except Exception:
+                            continue
+                        boundary_by_id.setdefault(_bid, []).append(_bf)
+
+                for field_id, cat_name in catalog:
                     if (field_ids_filter is not None) and (field_id not in field_ids_filter):
                         continue
 
-                    field_name = field_feature[name_field] if name_field else str(field_feature.id())
-                    field_area = field_feature[area_field] if area_field else 0
+                    boundaries = boundary_by_id.get(field_id, [])
+                    # field_feature wird weiter unten für die Glättung genutzt.
+                    # None => Glättung an der Feldgrenze entfällt automatisch.
+                    field_feature = boundaries[0] if boundaries else None
+
+                    # Name/Fläche: Feldgrenze bevorzugt, sonst Katalogname
+                    field_name = cat_name or str(field_id)
+                    field_area = 0
+                    if field_feature is not None:
+                        if name_field:
+                            _bn = field_feature[name_field]
+                            if not _is_nullish(_bn):
+                                field_name = str(_bn)
+                        if area_field:
+                            try:
+                                _ba = field_feature[area_field]
+                                field_area = float(_ba) if not _is_nullish(_ba) else 0
+                            except Exception:
+                                field_area = 0
 
                     pfd_unique_id = _make_pfd_id(ctr_num, frm_num, field_id)
 
@@ -2330,23 +2788,25 @@ class LkTechnikPathPlanner:
                         'F': frm_id
                     })
 
-                    #Boundary
-                    pln_element = ET.SubElement(pfd_element, 'PLN', {
-                        'A': '1', 'B': str(field_name), 'C': str(int(field_area)), 'E': f'PLN{field_id}'
-                    })
-                    lsg_field = ET.SubElement(pln_element, 'LSG', {'A': '1'})
-
-                    geom = field_feature.geometry()
-                    polys = geom.asMultiPolygon() or []
-                    if not polys:
-                        single_poly = geom.asPolygon()
-                        if single_poly:
-                            polys = [single_poly]
-                    for polygon in polys:
-                        for ring in polygon:
-                            for pt in ring:
-                                lon, lat = _to_wgs_xy_from_point(pt, ct_poly)
-                                ET.SubElement(lsg_field, 'PNT', {'A': '2', 'C': str(lat), 'D': str(lon)})
+                    #Boundary – eine PLN je Feld; je Feldgrenze eine LSG (A=1).
+                    pln_element = None
+                    if boundaries:
+                        pln_element = ET.SubElement(pfd_element, 'PLN', {
+                            'A': '1', 'B': str(field_name), 'C': str(int(field_area)), 'E': f'PLN{field_id}'
+                        })
+                        for bf in boundaries:
+                            lsg_field = ET.SubElement(pln_element, 'LSG', {'A': '1'})
+                            geom = bf.geometry()
+                            polys = geom.asMultiPolygon() or []
+                            if not polys:
+                                single_poly = geom.asPolygon()
+                                if single_poly:
+                                    polys = [single_poly]
+                            for polygon in polys:
+                                for ring in polygon:
+                                    for pt in ring:
+                                        lon, lat = _to_wgs_xy_from_point(pt, ct_poly)
+                                        ET.SubElement(lsg_field, 'PNT', {'A': '2', 'C': str(lat), 'D': str(lon)})
 
                     #Area obstacles
                     if fh_layer is not None:
@@ -2363,6 +2823,12 @@ class LkTechnikPathPlanner:
                                 continue
                             bf_val = fh_feature['befahrbar'] if 'befahrbar' in fh_names else 0
                             impass_val = "1" if bf_val == 0 else "0"
+                            # Falls das Feld keine Feldgrenze hat, PLN hier nachträglich anlegen,
+                            # damit Flächenhindernisse ein gültiges Eltern-Element haben.
+                            if pln_element is None:
+                                pln_element = ET.SubElement(pfd_element, 'PLN', {
+                                    'A': '1', 'B': str(field_name), 'C': str(int(field_area)), 'E': f'PLN{field_id}'
+                                })
                             lsg_hind = ET.SubElement(pln_element, 'LSG', {'A': '2', 'P094_Impassable': impass_val})
                             fh_geom = fh_feature.geometry()
                             polys2 = fh_geom.asMultiPolygon() or []

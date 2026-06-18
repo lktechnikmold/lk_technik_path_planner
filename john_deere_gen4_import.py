@@ -634,6 +634,93 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
         for lyr in layers.values():
             lyr.updateExtents()
 
+    # -------------------------------------------------
+    # NEU: Felder-Katalog (Felder.csv) je Betrieb schreiben
+    # -------------------------------------------------
+    try:
+        try:
+            from .lk_technik_path_planner import (
+                _felder_csv_path_in_dir, _read_felder_csv, _write_felder_csv,
+                _load_felder_layer, FELDER_LAYER_NAME
+            )
+        except Exception:
+            from lk_technik_path_planner import (
+                _felder_csv_path_in_dir, _read_felder_csv, _write_felder_csv,
+                _load_felder_layer, FELDER_LAYER_NAME
+            )
+
+        # Felder je (ctr_name, frm_name) sammeln
+        felder_by_key = {}
+        for info in field_info_by_guid.values():
+            farm_guid = info.get("farm_guid")
+            farm_info = farm_info_by_guid.get(farm_guid, {})
+            frm_name = farm_info.get("name", "Unbenannter Betrieb")
+            ctr_guid = farm_info.get("client_guid")
+            ctr_name = client_name_by_guid.get(ctr_guid, "Unbenannter Kunde")
+            key = (ctr_name, frm_name)
+            try:
+                fid = int(info["field_id"])
+            except Exception:
+                continue
+            felder_by_key.setdefault(key, {})[fid] = info.get("name", "")
+
+        for key, rows in felder_by_key.items():
+            frm_group = per_farm_groups.get(key)
+            if frm_group is None:
+                continue  # für dieses Feld wurde keine Gruppe angelegt
+            ctr_name, frm_name = key
+
+            if out_dir:
+                base = os.path.join(out_dir, _safe(ctr_name), _safe(frm_name))
+                csv_path = _felder_csv_path_in_dir(base)
+                merged = _read_felder_csv(csv_path)
+                for fid, nm in rows.items():
+                    if fid not in merged or (not merged.get(fid) and nm):
+                        merged[fid] = nm
+                _write_felder_csv(csv_path, merged)
+                # vorhandenen Felder-Layer neu laden oder neu anlegen
+                existing = None
+                for node in frm_group.children():
+                    try:
+                        lyr = node.layer()
+                    except Exception:
+                        lyr = None
+                    if isinstance(lyr, QgsVectorLayer) and lyr.name() == FELDER_LAYER_NAME:
+                        existing = lyr
+                        break
+                if existing is not None:
+                    existing.reload()
+                else:
+                    felder_layer = _load_felder_layer(csv_path)
+                    if felder_layer is not None:
+                        project.addMapLayer(felder_layer, False)
+                        frm_group.insertLayer(0, felder_layer)
+            else:
+                # Memory-Import: geometrieloser Felder-Layer
+                mem_felder = QgsVectorLayer("None", FELDER_LAYER_NAME, "memory")
+                dpf = mem_felder.dataProvider()
+                dpf.addAttributes([QgsField("id", QVariant.Int), QgsField("Name", QVariant.String)])
+                mem_felder.updateFields()
+                feats = []
+                for fid in sorted(rows.keys()):
+                    f = QgsFeature(mem_felder.fields())
+                    f.setAttribute("id", int(fid))
+                    f.setAttribute("Name", rows.get(fid, ""))
+                    feats.append(f)
+                if feats:
+                    dpf.addFeatures(feats)
+                mem_felder.updateExtents()
+                project.addMapLayer(mem_felder, False)
+                frm_group.insertLayer(0, mem_felder)
+
+        for frm_group in per_farm_groups.values():
+            try:
+                plugin._reorder_frm_group_layers(frm_group)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     plugin.iface.messageBar().pushMessage(
         "Erfolgreich",
         "John Deere Gen4 Daten wurden importiert.",

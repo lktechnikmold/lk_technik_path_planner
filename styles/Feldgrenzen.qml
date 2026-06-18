@@ -441,7 +441,7 @@
   </defaults>
   <constraints>
     <constraint unique_strength="1" exp_strength="0" notnull_strength="1" field="fid" constraints="3"/>
-    <constraint unique_strength="1" exp_strength="0" notnull_strength="0" field="ID" constraints="2"/>
+    <constraint unique_strength="2" exp_strength="0" notnull_strength="0" field="ID" constraints="2"/>
     <constraint unique_strength="0" exp_strength="0" notnull_strength="0" field="Flaeche" constraints="0"/>
     <constraint unique_strength="0" exp_strength="0" notnull_strength="0" field="Name" constraints="0"/>
   </constraints>

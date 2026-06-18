@@ -2,7 +2,7 @@
 name=LK-Technik Path Planner
 qgisMinimumVersion=3.16
 qgisMaximumVersion=3.99
-version=1.2.0
+version=1.3.0
 author=Florian Köck
 email=florian.koeck@lk-noe.at
 category=Analysis
@@ -27,3 +27,9 @@ about=Combined plugin for ISOXML and John Deere Gen4 import and export.
     Developed by Florian Köck (LK-Technik Mold)
 experimental=False
 deprecated=False
+changelog=1.3.0 - Feld-Katalog & robuster Export
+    - Neuer Feld-Katalog Felder.csv (id;Name) pro Betrieb als Source of Truth.
+    - Import (ISOXML & John Deere) schreibt alle Felder in den Katalog, auch ohne Feldgrenze.
+    - Export laeuft ueber den Katalog: Felder ohne Grenze werden exportiert, mehrere Grenzen pro Feld moeglich.
+    - Auswahlbaum zeigt Katalog-Felder; Unique-Constraint auf ID von hart auf weich (nur Warnung).
+    1.2.0 - Ausgangsversion

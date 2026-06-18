@@ -46,11 +46,60 @@ The plugin supports structured ISOXML data (e.g. TASKDATA.XML) and integrates di
   - Reads `TASKDATA.XML`, `MasterData.XML` or Folder with `TASKDATA.XML` or `MasterData.XML` in it.
   - Creates structured layer groups (client → farm)
   - Generates layers:
+    - Felder (field catalogue, `Felder.csv`)
     - Feldgrenzen
     - Fahrspuren (with `Segment`)
     - Punkthindernis
     - Flaechenhindernis
   - Optional export per FRM as GeoPackage (GPKG)
+
+### Field catalogue (`Felder.csv`)
+
+Since version 1.3.0 every farm folder additionally contains a `Felder.csv`
+(`id;Name`). It is the authoritative list of fields and is what the export
+iterates over. Consequences:
+
+- A field (PFD) is created in `Felder.csv` for **every** imported partfield –
+  even if it has no boundary. Guidance lines without a *Feldgrenze* are therefore
+  no longer lost on export.
+- Several *Feldgrenzen* may share the same field `ID`.
+- When a new *Feldgrenze* is committed in QGIS, a matching entry is created in
+  `Felder.csv` automatically and a missing `ID` is assigned.
+- Fields with **only guidance lines** (no boundary) can be created in two ways:
+  1. Button **Feld hinzufügen** in the export view – creates a named catalogue
+     entry and assigns the next free `ID`, which you then enter on the tracks.
+  2. Draw the tracks, set their `ID`, and open the Path Planner – the catalogue
+     is synchronised on open and picks up the track `ID`s automatically.
+
+The catalogue is rebuilt from all layers (Feldgrenzen, Fahrspuren, obstacles)
+every time the Path Planner dialog is opened, so `Felder.csv` always stays in
+sync even if a layer was edited outside the plugin.
+
+### Field name vs. boundary name
+
+A field can have several boundaries with **different** names. The naming model is:
+
+- The **field** (catalogue) name is set **once** – from the **first** boundary
+  drawn for it, or from the name given in *Feld hinzufügen*. Additional
+  boundaries added later to the same field keep their **own** names; those do not
+  change the field name.
+- Rename the field via right-click → *Feld umbenennen…* (this changes only the
+  catalogue entry, not the individual boundary names).
+- On export the `PFD` name is the field (catalogue) name, while each boundary is
+  written as its own `PLN` carrying that boundary's individual name. Fields with
+  several boundaries therefore produce several `PLN` elements.
+
+Since version 1.5.0 the `ID` field of Feldgrenzen, Fahrspuren and the obstacle
+layers is shown as a **dropdown** (QGIS value relation) listing the field names
+from the catalogue. You pick a field by name; the numeric `id` is stored behind
+the scenes, so there is no need to look up which field has which id. The dropdown
+is (re)configured each time the Path Planner is opened, pointing at the `Felder`
+layer of the same farm.
+
+Note: CSV layers are read-only inside QGIS (delimitedtext provider). The plugin
+manages `Felder.csv` programmatically; edit field names directly in the file or
+via the *Feldgrenze* attributes. The file is always written with `;` as the
+delimiter (UTF-8 with BOM).
 
 
 ## Usage

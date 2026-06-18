@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# QGIS / OS
+*.qgz~
+.DS_Store
+Thumbs.db
+
+# Lokale Test-/Ausgabedaten
+*.gpkg-shm
+*.gpkg-wal
