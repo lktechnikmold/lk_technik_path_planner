@@ -33,8 +33,8 @@ Copyright- und Autorhinweise (Florian Köck, LK-Technik Mold) erhalten bleiben.
 
 Author: Florian Köck
 Institution: LK-Technik Mold
-Version: 1.5.0
-Date: 2026-06-18
+Version: 1.2.0
+Date: 2026-04-13
 """
 
 
@@ -1868,6 +1868,7 @@ class LkTechnikPathPlanner:
 
         menu = QMenu()
         act_rename = menu.addAction("Feld umbenennen…")
+        act_delete = menu.addAction("Feld löschen…")
         chosen = menu.exec_(tree.viewport().mapToGlobal(pos))
         if chosen == act_rename:
             try:
@@ -1876,6 +1877,144 @@ class LkTechnikPathPlanner:
                 self.iface.messageBar().pushMessage(
                     "Fehler", f"Umbenennen fehlgeschlagen: {e}", level=Qgis.Critical, duration=6
                 )
+        elif chosen == act_delete:
+            try:
+                self._delete_field(ctr_name, frm_name, int(fid), item.text(0))
+            except Exception as e:
+                self.iface.messageBar().pushMessage(
+                    "Fehler", f"Löschen fehlgeschlagen: {e}", level=Qgis.Critical, duration=6
+                )
+
+    def _delete_field(self, ctr_name: str, frm_name: str, field_id: int, current_name: str):
+        """
+        Löscht ein komplettes Feld: alle Objekte mit dieser ID aus Feldgrenzen,
+        Fahrspuren, Punkthindernis und Flaechenhindernis sowie den Eintrag in
+        Felder.csv. Mit Sicherheitsabfrage.
+        """
+        # Betriebsgruppe finden
+        root = QgsProject.instance().layerTreeRoot()
+        frm_group = None
+        for ctr in root.children():
+            if isinstance(ctr, QgsLayerTreeGroup) and ctr.name() == ctr_name:
+                for frm in ctr.children():
+                    if isinstance(frm, QgsLayerTreeGroup) and frm.name() == frm_name:
+                        frm_group = frm
+                        break
+                break
+        if frm_group is None:
+            return
+
+        layer_names = ("Feldgrenzen", "Fahrspuren", "Punkthindernis", "Flaechenhindernis")
+
+        # Felder.csv-Pfad ermitteln
+        csv_path = ""
+        for nm in layer_names:
+            lyr = _find_child_layer(frm_group, nm)
+            p = _felder_csv_path_for_layer(lyr) if lyr else ""
+            if p:
+                csv_path = p
+                break
+        if not csv_path:
+            QMessageBox.warning(
+                self.iface.mainWindow(),
+                "Nicht möglich",
+                "Die Layer dieses Betriebs sind noch temporär (nicht gespeichert)."
+            )
+            return
+
+        # Ebenen im Bearbeitungsmodus blockieren das Löschen über den Provider
+        editing = [nm for nm in layer_names
+                   if (_find_child_layer(frm_group, nm) is not None
+                       and _find_child_layer(frm_group, nm).isEditable())]
+        if editing:
+            QMessageBox.warning(
+                self.iface.mainWindow(),
+                "Bearbeitung aktiv",
+                "Bitte zuerst den Bearbeitungsmodus schließen für: "
+                + ", ".join(editing) + "."
+            )
+            return
+
+        # Wie viele Objekte sind betroffen? (für die Abfrage)
+        counts = {}
+        fids_by_layer = {}
+        for nm in layer_names:
+            lyr = _find_child_layer(frm_group, nm)
+            if lyr is None:
+                continue
+            idf = _pick_field(_field_map(lyr), "ID")
+            if not idf:
+                continue
+            fids = []
+            for f in lyr.getFeatures():
+                v = f[idf]
+                if _is_nullish(v):
+                    continue
+                try:
+                    if int(v) == int(field_id):
+                        fids.append(f.id())
+                except Exception:
+                    continue
+            if fids:
+                counts[nm] = len(fids)
+                fids_by_layer[nm] = fids
+
+        label = current_name or f"Feld {field_id}"
+        detail = "\n".join(f"  • {nm}: {counts[nm]} Objekt(e)" for nm in layer_names if nm in counts)
+        if not detail:
+            detail = "  • (keine Geometrien – nur Katalogeintrag)"
+
+        msg = QMessageBox(self.iface.mainWindow())
+        msg.setIcon(QMessageBox.Warning)
+        msg.setWindowTitle("Feld löschen")
+        msg.setText(f"Sind Sie sicher, dass Sie das Feld „{label}“ (ID {field_id}) löschen möchten?")
+        msg.setInformativeText(
+            "Damit werden ALLE Daten dieses Feldes unwiderruflich gelöscht – "
+            "Feldgrenze(n), Fahrspuren, Hindernisse und der Katalogeintrag:\n\n"
+            + detail
+        )
+        msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg.setDefaultButton(QMessageBox.No)
+        msg.button(QMessageBox.Yes).setText("Ja, löschen")
+        msg.button(QMessageBox.No).setText("Abbrechen")
+        if msg.exec_() != QMessageBox.Yes:
+            return
+
+        # Objekte aus allen Ebenen entfernen
+        self._felder_guard = True
+        try:
+            for nm, fids in fids_by_layer.items():
+                lyr = _find_child_layer(frm_group, nm)
+                if lyr is None or not fids:
+                    continue
+                try:
+                    lyr.dataProvider().deleteFeatures(fids)
+                    lyr.reload()
+                    lyr.updateExtents()
+                    lyr.triggerRepaint()
+                except Exception:
+                    pass
+        finally:
+            self._felder_guard = False
+
+        # Katalogeintrag entfernen
+        rows = _read_felder_csv(csv_path)
+        if field_id in rows:
+            rows.pop(field_id, None)
+            _write_felder_csv(csv_path, rows)
+
+        ref_layer = None
+        for nm in layer_names:
+            ref_layer = _find_child_layer(frm_group, nm)
+            if ref_layer is not None:
+                break
+        if ref_layer is not None:
+            self._reload_felder_for_feldgrenzen(ref_layer, csv_path)
+
+        self.dlg.refresh_tree()
+        self.iface.messageBar().pushMessage(
+            "OK", f"Feld „{label}“ (ID {field_id}) wurde gelöscht.", level=Qgis.Success, duration=5
+        )
 
     def _rename_field(self, ctr_name: str, frm_name: str, field_id: int, current_name: str):
         """
@@ -2538,7 +2677,7 @@ class LkTechnikPathPlanner:
             "VersionMajor": "3" if is_v3 else "4",
             "VersionMinor": "0",
             "ManagementSoftwareManufacturer": "LK-Technik Mold",
-            "ManagementSoftwareVersion": "1.5.0",
+            "ManagementSoftwareVersion": "1.6.0",
             "DataTransferOrigin": "1"
         })
 
