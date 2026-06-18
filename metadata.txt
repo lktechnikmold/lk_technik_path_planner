@@ -2,7 +2,7 @@
 name=LK-Technik Path Planner
 qgisMinimumVersion=3.16
 qgisMaximumVersion=3.99
-version=1.6.0
+version=1.7.0
 author=Florian Köck
 email=florian.koeck@lk-noe.at
 category=Analysis
@@ -27,7 +27,12 @@ about=Combined plugin for ISOXML and John Deere Gen4 import and export.
     Developed by Florian Köck (LK-Technik Mold)
 experimental=False
 deprecated=False
-changelog=1.6.0 - Felder loeschen
+changelog=1.7.0 - Namensmodell & Stabilisierung
+    - Feldname = Name der ersten Feldgrenze (oder via "Feld hinzufuegen"); weitere Grenzen behalten eigene Namen.
+    - Export: PFD traegt den Feldnamen, jede Feldgrenze eine eigene PLN mit eigenem Namen.
+    - Fix: kein OGR-Fehler / keine Doppelanlage mehr bei offenem Bearbeitungsmodus.
+    - Fix: Feld-Dropdown erscheint sofort nach Import und in Altprojekten.
+    1.6.0 - Felder loeschen
     - Rechtsklick "Feld loeschen..." mit Sicherheitsabfrage; entfernt Grenzen, Fahrspuren, Hindernisse und Katalogeintrag.
     1.5.0 - Feld-Auswahl per Dropdown
     - ID-Feld von Feldgrenzen/Fahrspuren/Hindernissen als Value-Relation-Dropdown (zeigt Feldnamen, speichert id).

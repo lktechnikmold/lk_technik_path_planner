@@ -33,8 +33,8 @@ Copyright- und Autorhinweise (Florian Köck, LK-Technik Mold) erhalten bleiben.
 
 Author: Florian Köck
 Institution: LK-Technik Mold
-Version: 1.2.0
-Date: 2026-04-13
+Version: 1.7.0
+Date: 2026-06-18
 """
 
 
@@ -1426,18 +1426,16 @@ class LkTechnikPathPlanner:
                         idx = poly_layer.fields().indexOf(id_field)
                         if idx >= 0:
                             attr_changes[feat.id()] = {idx: fid}
-                # Name: gefüllter Feldgrenzen-Name wird in den Katalog übernommen.
+                # Feldname wird nur EINMAL gesetzt – durch die ERSTE Feldgrenze
+                # (oder den Button "Feld hinzufügen"). Weitere Grenzen desselben
+                # Feldes haben EIGENE Namen, die den Feldnamen NICHT verändern.
                 bname = ""
                 if name_field:
                     nv = feat[name_field]
                     if not _is_nullish(nv):
                         bname = str(nv).strip()
-                if bname:
-                    if rows.get(fid) != bname:
-                        rows[fid] = bname
-                        changed = True
-                elif fid not in rows:
-                    rows[fid] = f"Feld {fid}"
+                if fid not in rows or not rows.get(fid):
+                    rows[fid] = bname or f"Feld {fid}"
                     changed = True
 
             if attr_changes:
@@ -2067,34 +2065,9 @@ class LkTechnikPathPlanner:
         rows[field_id] = new_name
         _write_felder_csv(csv_path, rows)
 
-        # Name-Attribut der Feldgrenze(n) mit dieser ID angleichen
-        poly = _find_child_layer(frm_group, "Feldgrenzen")
-        if poly is not None:
-            pmap = _field_map(poly)
-            idf = _pick_field(pmap, "ID")
-            namef = _pick_field(pmap, "Name")
-            if idf and namef:
-                nidx = poly.fields().indexOf(namef)
-                changes = {}
-                for f in poly.getFeatures():
-                    v = f[idf]
-                    if _is_nullish(v):
-                        continue
-                    try:
-                        if int(v) == int(field_id):
-                            changes[f.id()] = {nidx: new_name}
-                    except Exception:
-                        continue
-                if changes and nidx >= 0:
-                    self._felder_guard = True
-                    try:
-                        poly.dataProvider().changeAttributeValues(changes)
-                        poly.reload()
-                        poly.triggerRepaint()
-                    except Exception:
-                        pass
-                    finally:
-                        self._felder_guard = False
+        # Hinweis: Die Namen der einzelnen Feldgrenzen werden bewusst NICHT
+        # mitgeändert – sie sind eigenständig (mehrere Grenzen pro Feld können
+        # unterschiedlich heißen). Umbenannt wird nur das Feld selbst (Katalog).
 
         ref_layer = _find_child_layer(frm_group, "Feldgrenzen") \
             or _find_child_layer(frm_group, "Fahrspuren") \
@@ -2677,7 +2650,7 @@ class LkTechnikPathPlanner:
             "VersionMajor": "3" if is_v3 else "4",
             "VersionMinor": "0",
             "ManagementSoftwareManufacturer": "LK-Technik Mold",
-            "ManagementSoftwareVersion": "1.6.0",
+            "ManagementSoftwareVersion": "1.7.0",
             "DataTransferOrigin": "1"
         })
 
@@ -3431,20 +3404,17 @@ class LkTechnikPathPlanner:
                     # None => Glättung an der Feldgrenze entfällt automatisch.
                     field_feature = boundaries[0] if boundaries else None
 
-                    # Name/Fläche: Feldgrenze bevorzugt, sonst Katalogname
+                    # PFD-Name = Feld-(Katalog-)Name. Fläche aus der ersten Grenze.
+                    # Die Namen einzelner Grenzen fließen NICHT in den Feldnamen,
+                    # sondern in die jeweilige PLN (siehe unten).
                     field_name = cat_name or str(field_id)
                     field_area = 0
-                    if field_feature is not None:
-                        if name_field:
-                            _bn = field_feature[name_field]
-                            if not _is_nullish(_bn):
-                                field_name = str(_bn)
-                        if area_field:
-                            try:
-                                _ba = field_feature[area_field]
-                                field_area = float(_ba) if not _is_nullish(_ba) else 0
-                            except Exception:
-                                field_area = 0
+                    if field_feature is not None and area_field:
+                        try:
+                            _ba = field_feature[area_field]
+                            field_area = float(_ba) if not _is_nullish(_ba) else 0
+                        except Exception:
+                            field_area = 0
 
                     pfd_unique_id = _make_pfd_id(ctr_num, frm_num, field_id)
 
@@ -3456,25 +3426,43 @@ class LkTechnikPathPlanner:
                         'F': frm_id
                     })
 
-                    #Boundary – eine PLN je Feld; je Feldgrenze eine LSG (A=1).
+                    #Boundary – je Feldgrenze EINE eigene PLN mit EIGENEM Namen (B).
+                    # Mehrere Grenzen pro Feld können so unterschiedlich heißen.
+                    # pln_element zeigt auf die erste PLN (für Flächenhindernisse).
+                    # Felder ohne Grenze erhalten ein PFD ohne PLN.
                     pln_element = None
-                    if boundaries:
-                        pln_element = ET.SubElement(pfd_element, 'PLN', {
-                            'A': '1', 'B': str(field_name), 'C': str(int(field_area)), 'E': f'PLN{field_id}'
+                    for bf in boundaries:
+                        bname = field_name
+                        if name_field:
+                            _bn = bf[name_field]
+                            if not _is_nullish(_bn):
+                                bname = str(_bn)
+                        barea = field_area
+                        if area_field:
+                            try:
+                                _bv = bf[area_field]
+                                barea = float(_bv) if not _is_nullish(_bv) else field_area
+                            except Exception:
+                                barea = field_area
+
+                        this_pln = ET.SubElement(pfd_element, 'PLN', {
+                            'A': '1', 'B': str(bname), 'C': str(int(barea)), 'E': f'PLN{field_id}'
                         })
-                        for bf in boundaries:
-                            lsg_field = ET.SubElement(pln_element, 'LSG', {'A': '1'})
-                            geom = bf.geometry()
-                            polys = geom.asMultiPolygon() or []
-                            if not polys:
-                                single_poly = geom.asPolygon()
-                                if single_poly:
-                                    polys = [single_poly]
-                            for polygon in polys:
-                                for ring in polygon:
-                                    for pt in ring:
-                                        lon, lat = _to_wgs_xy_from_point(pt, ct_poly)
-                                        ET.SubElement(lsg_field, 'PNT', {'A': '2', 'C': str(lat), 'D': str(lon)})
+                        if pln_element is None:
+                            pln_element = this_pln
+
+                        lsg_field = ET.SubElement(this_pln, 'LSG', {'A': '1'})
+                        geom = bf.geometry()
+                        polys = geom.asMultiPolygon() or []
+                        if not polys:
+                            single_poly = geom.asPolygon()
+                            if single_poly:
+                                polys = [single_poly]
+                        for polygon in polys:
+                            for ring in polygon:
+                                for pt in ring:
+                                    lon, lat = _to_wgs_xy_from_point(pt, ct_poly)
+                                    ET.SubElement(lsg_field, 'PNT', {'A': '2', 'C': str(lat), 'D': str(lon)})
 
                     #Area obstacles
                     if fh_layer is not None:
