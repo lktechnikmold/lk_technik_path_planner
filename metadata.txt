@@ -2,7 +2,7 @@
 name=LK-Technik Path Planner
 qgisMinimumVersion=3.16
 qgisMaximumVersion=3.99
-version=1.7.0
+version=2.0.0
 author=Florian Köck
 email=florian.koeck@lk-noe.at
 category=Analysis
@@ -11,9 +11,10 @@ license=GPL-3.0-or-later
 homepage=https://noe.lko.at
 repository=https://github.com/lktechnikmold/lk_technik_path_planner
 tracker=https://github.com/lktechnikmold/lk_technik_path_planner/issues
-description=Import and export of ISOXML-based guidance data and John Deere Gen4 files for agricultural machinery.
-about=Combined plugin for ISOXML and John Deere Gen4 import and export.
-    Provides a structured selection tree (Customer → Farm → Fields) and supports ISOXML v3, v4 and John Deere Gen4, including optional contour segments.
+description=Import and export of guidance data for agricultural machinery: ISOXML (v3/v4), John Deere Gen4 and AgGPS.
+about=Plugin for importing and exporting guidance and field data for agricultural steering systems.
+    The export format is chosen automatically from the selected terminal (ISOXML v3/v4, John Deere Gen4, AgGPS).
+    Features a field catalogue (Felder.csv) as the single source of truth, a structured selection tree (Customer → Farm → Field), field management (add, rename, delete, dropdown selection), optional contour segments (Fendt One), and AgGPS import/export.
     
     DISCLAIMER:
     This plugin is distributed under the GNU General Public License v3.0 (or later).
@@ -27,8 +28,28 @@ about=Combined plugin for ISOXML and John Deere Gen4 import and export.
     Developed by Florian Köck (LK-Technik Mold)
 experimental=False
 deprecated=False
-changelog=1.7.0 - Namensmodell & Stabilisierung
-    - Feldname = Name der ersten Feldgrenze (oder via "Feld hinzufuegen"); weitere Grenzen behalten eigene Namen.
+changelog=2.0.0 - Veroeffentlichung: Feld-Katalog, Terminal-Auswahl, AgGPS
+    - Feld-Katalog (Felder.csv) als zentrale Quelle: Felder ohne Grenze und mehrere Grenzen pro Feld; Felder anlegen/umbenennen/loeschen; Feld-Auswahl per Dropdown.
+    - Terminal-Auswahl bestimmt das Exportformat (ISOXML v3/v4, John Deere Gen4, AgGPS); Kontursegmente nur bei Fendt One.
+    - AgGPS-Export und -Import (Ordnerstruktur mit boundary/swaths/AreaFeature/PointFeature.shp).
+    - Diverse Stabilitaets-Fixes; Feldflaeche wird immer aus der Geometrie berechnet.
+    1.10.1 - AgGPS-Import Fix
+    - Feldflaeche wird beim Import immer aus der Geometrie berechnet (nie aus der Datei).
+    1.10.0 - AgGPS-Import
+    - Import der AgGPS-Ordnerstruktur (Data/Kunde/Betrieb/Feld) mit boundary/swaths/AreaFeature/PointFeature.shp.
+    - Wird automatisch erkannt, wenn ein AgGPS-Ordner gewaehlt wird.
+    1.9.1 - AgGPS-Export Fixes
+    - Fix: MultiLineString-Fahrspuren verursachten einen Fehler (Geraden/Kurven-Erkennung jetzt robust ueber Stuetzpunkt-Anzahl).
+    - boundary.shp enthaelt zusaetzlich die Spalte Area (Flaeche in m2).
+    1.9.0 - AgGPS-Export
+    - Export ins AgGPS-Format (Trimble/Case/New Holland u.a.): AgGPS/Data/Kunde/Betrieb/Feld/ mit boundary.shp, swaths.shp, AreaFeature.shp, PointFeature.shp.
+    - swaths.shp: Spalte id (0 = Gerade, 1 = Kurve), Spalte Name.
+    1.8.0 - Terminal-Auswahl bestimmt das Exportformat
+    - Statt v3/v4/Gen4/Kontursegmente jetzt ein Terminal-Dropdown (Marke + Modell); das Dateiformat wird automatisch gesetzt.
+    - Kontursegmente-Option erscheint nur bei Fendt One.
+    - AgGPS-Terminals (Trimble/Case/New Holland) werden erkannt, der Export ist aber noch nicht implementiert (Hinweis).
+    1.7.0 - Namensmodell & Stabilisierung
+    - Feldname = Name der ersten Feldgrenze (oder via "Feld hinzufügen"); weitere Grenzen behalten eigene Namen.
     - Export: PFD traegt den Feldnamen, jede Feldgrenze eine eigene PLN mit eigenem Namen.
     - Fix: kein OGR-Fehler / keine Doppelanlage mehr bei offenem Bearbeitungsmodus.
     - Fix: Feld-Dropdown erscheint sofort nach Import und in Altprojekten.

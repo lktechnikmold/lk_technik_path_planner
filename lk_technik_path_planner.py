@@ -8,7 +8,7 @@ Dieses Plugin vereint Import und Export von ISOXML-Daten:
 
 Entwickelt für QGIS 3.x
 
-Copyright (C) 2024–2025  Florian Köck, LK-Technik Mold
+Copyright (C) 2024–2026  Florian Köck, LK-Technik Mold
 E-Mail: florian.koeck@lk-noe.at
 Website: https://www.lk-technik.at
 Organisation: Landwirtschaftskammer Niederösterreich
@@ -33,8 +33,8 @@ Copyright- und Autorhinweise (Florian Köck, LK-Technik Mold) erhalten bleiben.
 
 Author: Florian Köck
 Institution: LK-Technik Mold
-Version: 1.7.0
-Date: 2026-06-18
+Version: 2.0.0
+Date: 2026-07-02
 """
 
 
@@ -58,9 +58,19 @@ except Exception:
     from john_deere_gen4_export import export_john_deere_gen4
 
 try:
+    from .aggps_export import export_aggps
+except Exception:
+    from aggps_export import export_aggps
+
+try:
     from .john_deere_gen4_import import import_john_deere_gen4
 except Exception:
     from john_deere_gen4_import import import_john_deere_gen4
+
+try:
+    from .aggps_import import import_aggps, detect_aggps_data_root
+except Exception:
+    from aggps_import import import_aggps, detect_aggps_data_root
 
 from qgis.core import (
     Qgis, QgsProject, QgsVectorLayer, QgsField, QgsFields, QgsFeature, QgsGeometry, QgsPointXY,
@@ -111,21 +121,72 @@ def _feat_val(feat: QgsFeature, fmap: dict, *candidates: str, default=None):
     except Exception:
         return default
 
-
-# ============================================================
-# NEU: Felder-Katalog (Felder.csv)
-# ------------------------------------------------------------
-# Felder.csv ist die "Source of Truth" für die Felder eines Betriebs.
-# Spalten: id;Name
-# Jeder Eintrag definiert ein Feld; Feldgrenzen, Fahrspuren und
-# Hindernisse referenzieren das Feld über die Spalte ID == id.
-# Dadurch können Felder ohne Feldgrenze und mehrere Feldgrenzen pro
-# Feld existieren, ohne beim Export verloren zu gehen.
-# ============================================================
-
 FELDER_LAYER_NAME = "Felder"
 FELDER_CSV_NAME = "Felder.csv"
-FELDER_CSV_DELIM = ";"  # semikolon = Excel-freundlich (v.a. unter DE-Locale)
+FELDER_CSV_DELIM = ";" 
+
+# ============================================================
+# Terminals -> Export-Dateiformat
+# Format-Codes: "3.3" = ISOXML v3, "4.2" = ISOXML v4,
+#               "Gen4" = John Deere Gen4, "AgGPS" = Trimble/Case/NH
+# ============================================================
+TERMINALS = [
+    ("ISOXML", "v3.3", "3.3"),
+    ("ISOXML", "v4.2", "4.2"),
+    ("Case/Steyr", "AFS Pro 700", "3.3"),
+    ("Case/Steyr", "AFS Pro 1200", "4.2"),
+    ("Case/Steyr", "FM 750", "AgGPS"),
+    ("Case/Steyr", "FM 1000", "AgGPS"),
+    ("CHC", "NAV", "4.2"),
+    ("CCI", "1200", "4.2"),
+    ("Claas", "Cemis 1200", "4.2"),
+    ("Claas", "S10", "3.3"),
+    ("Deutz", "iMonitor 3", "4.2"),
+    ("Fendt", "One", "4.2"),
+    ("Fendt", "Vario Terminal NT01", "4.2"),
+    ("FJ", "Dynamics", "4.2"),
+    ("John Deere", "GS4", "Gen4"),
+    ("John Deere", "GS5", "Gen4"),
+    ("John Deere", "GS5+", "Gen4"),
+    ("Lacos", "LC:ONE", "4.2"),
+    ("Massey Ferguson", "Datatronic 5", "4.2"),
+    ("Massey Ferguson", "Fieldstar 5", "4.2"),
+    ("New Holland", "FM 750", "AgGPS"),
+    ("New Holland", "FM 1000", "AgGPS"),
+    ("New Holland", "Intelli View 4", "3.3"),
+    ("Raven", "CR7", "4.2"),
+    ("Raven", "CR12", "4.2"),
+    ("Raven", "Viper 4", "4.2"),
+    ("Raven", "Viper 4+", "4.2"),
+    ("Sveaverken", "Autosteer", "4.2"),
+    ("Topcon", "X25", "4.2"),
+    ("Topcon", "X35", "4.2"),
+    ("Topcon", "XD", "4.2"),
+    ("Topcon", "XD+", "4.2"),
+    ("Trimble", "CFX 750", "AgGPS"),
+    ("Trimble", "FM 750", "AgGPS"),
+    ("Trimble", "FM 1000", "AgGPS"),
+    ("Trimble", "FMX 750", "AgGPS"),
+    ("Trimble", "GFX 750", "AgGPS"),
+    ("Trimble", "TMX 2050", "AgGPS"),
+    ("Valtra", "Smart Touch", "4.2"),
+]
+
+# Standard-Terminal (Vorauswahl)
+DEFAULT_TERMINAL = ("Fendt", "One", "4.2")
+
+
+def _format_label(fmt: str) -> str:
+    return {
+        "3.3": "ISOXML v3.3",
+        "4.2": "ISOXML v4.2",
+        "Gen4": "John Deere Gen4",
+        "AgGPS": "AgGPS",
+    }.get(fmt, fmt)
+
+
+def _is_fendt_one(brand: str, model: str) -> bool:
+    return brand == "Fendt" and model == "One"
 
 
 def _felder_csv_path_in_dir(base_dir: str) -> str:
@@ -284,7 +345,7 @@ def _field_catalog_for_frm(frm_group: QgsLayerTreeGroup) -> list:
     if felder_layer is not None:
         catalog.update(_felder_rows_from_layer(felder_layer))
 
-    # Ergänzen/Fallback aus Feldgrenzen (ohne vorhandene Namen zu überschreiben)
+
     poly_layer = _find_child_layer(frm_group, "Feldgrenzen")
     if poly_layer is not None:
         fmap = _field_map(poly_layer)
@@ -475,48 +536,43 @@ class ToolboxDialog(QDialog):
         path_row.addWidget(btn)
         v.addLayout(path_row)
 
-        # Exportformat / Segment-Optionen
+        # Exportformat über Terminal-Auswahl (bestimmt das Dateiformat automatisch)
         opt_row = QHBoxLayout()
-        self.chk_v3 = QCheckBox("ISOXML v3 (sonst v4)")
-        self.chk_jd_gen4 = QCheckBox("John Deere Gen4")
-        self.chk_seg = QCheckBox("Kontursegmente (nur v4)")
+        opt_row.addWidget(QLabel("Terminal:"))
+        self.cmb_terminal = QComboBox()
+        for brand, model, fmt in TERMINALS:
+            self.cmb_terminal.addItem(f"{brand} – {model}", (brand, model, fmt))
 
-        def _toggle_export_mode():
-            """
-            Regeln:
-            - ISOXML v3 und John Deere Gen4 schließen sich gegenseitig aus
-            - Kontursegmente nur bei ISOXML v4 erlauben
-            - bei v3 oder John Deere: Kontursegmente deaktivieren + abhaken
-            """
+        self.lbl_format = QLabel("")
+        # Kontursegmente nur für Fendt One
+        self.chk_seg = QCheckBox("Kontursegmente")
 
-            sender = self.sender()
-
-            # gegenseitiger Ausschluss
-            if sender == self.chk_v3 and self.chk_v3.isChecked():
-                self.chk_jd_gen4.blockSignals(True)
-                self.chk_jd_gen4.setChecked(False)
-                self.chk_jd_gen4.blockSignals(False)
-
-            elif sender == self.chk_jd_gen4 and self.chk_jd_gen4.isChecked():
-                self.chk_v3.blockSignals(True)
-                self.chk_v3.setChecked(False)
-                self.chk_v3.blockSignals(False)
-
-            disable_segments = self.chk_v3.isChecked() or self.chk_jd_gen4.isChecked()
-            self.chk_seg.setEnabled(not disable_segments)
-
-            if disable_segments:
+        def _on_terminal_changed():
+            data = self.cmb_terminal.currentData()
+            if not data:
+                return
+            brand, model, fmt = data
+            self.lbl_format.setText(f"Format: {_format_label(fmt)}")
+            seg_visible = _is_fendt_one(brand, model)
+            self.chk_seg.setVisible(seg_visible)
+            if not seg_visible:
                 self.chk_seg.setChecked(False)
 
-        self.chk_v3.toggled.connect(_toggle_export_mode)
-        self.chk_jd_gen4.toggled.connect(_toggle_export_mode)
-        _toggle_export_mode()
+        self.cmb_terminal.currentIndexChanged.connect(_on_terminal_changed)
 
-        opt_row.addWidget(self.chk_v3)
-        opt_row.addWidget(self.chk_jd_gen4)
+        opt_row.addWidget(self.cmb_terminal, 1)
+        opt_row.addWidget(self.lbl_format)
         opt_row.addWidget(self.chk_seg)
         opt_row.addStretch(1)
         v.addLayout(opt_row)
+
+        # Vorauswahl: Standard-Terminal
+        for i in range(self.cmb_terminal.count()):
+            d = self.cmb_terminal.itemData(i)
+            if d and d[0] == DEFAULT_TERMINAL[0] and d[1] == DEFAULT_TERMINAL[1]:
+                self.cmb_terminal.setCurrentIndex(i)
+                break
+        _on_terminal_changed()
 
         # Erweiterte Optionen (einklappbar)
         self.btn_adv_export = QToolButton()
@@ -653,7 +709,7 @@ class ToolboxDialog(QDialog):
         def _pick_in_folder():
             dn = QFileDialog.getExistingDirectory(
                 self,
-                "John Deere Gen4 Ordner wählen"
+                "Ordner wählen (Gen4 / AgGPS / ISOXML)"
             )
             if dn:
                 self.in_line.setText(dn)
@@ -666,7 +722,7 @@ class ToolboxDialog(QDialog):
         h1.addWidget(btn_file)
         h1.addWidget(btn_folder)
 
-        lay.addRow(QLabel("TASKDATA.XML oder Gen4-Ordner:"), h1)
+        lay.addRow(QLabel("TASKDATA.XML, Gen4- oder AgGPS-Ordner:"), h1)
         self.out_dir_line = QLineEdit()
         btn_dir = QPushButton("…")
         def _pick_dir():
@@ -710,7 +766,7 @@ class ToolboxDialog(QDialog):
                 frm_item.setFlags(frm_item.flags() | Qt.ItemIsUserCheckable)
                 frm_item.setCheckState(0, Qt.Checked)
                 ctr_item.addChild(frm_item)
-                # NEU: Felder aus dem Katalog (Felder.csv) statt nur aus Feldgrenzen.
+                # Felder aus dem Katalog (Felder.csv) statt nur aus Feldgrenzen.
                 # Dadurch erscheinen auch Felder ohne Feldgrenze (z.B. nur Fahrspuren).
                 catalog = _field_catalog_for_frm(frm_node)
                 if not catalog:
@@ -724,6 +780,13 @@ class ToolboxDialog(QDialog):
                     item.setCheckState(0, Qt.Checked)
                     frm_item.addChild(item)
         self.tree.expandAll()
+
+    def selected_terminal(self):
+        """Liefert (Marke, Bezeichnung, Format) des gewählten Terminals."""
+        d = self.cmb_terminal.currentData()
+        if d:
+            return d
+        return (None, None, None)
 
     def selected_export_map(self):
         res = {}
@@ -840,7 +903,7 @@ class LkTechnikPathPlanner:
         self.actions = []
         self.menu = _tr('&LK-Technik Path Planner')
         self.first_start = True
-        # NEU: Felder.csv-Automatik
+        # Felder.csv-Automatik
         self._wired_feldgrenzen = set()   # Layer-IDs mit verbundenem Commit-Signal
         self._felder_guard = False        # Re-Entrancy-Schutz beim Zurückschreiben der ID
 
@@ -1062,9 +1125,6 @@ class LkTechnikPathPlanner:
                         callback=self.run,
                         parent=self.iface.mainWindow())
 
-        # NEU: Neu hinzugefügte Feldgrenzen-Layer automatisch mit der
-        # Felder.csv-Automatik verbinden (deckt Import, Betrieb-anlegen und
-        # das erneute Öffnen gespeicherter Projekte ab).
         try:
             QgsProject.instance().layersAdded.connect(self._on_layers_added)
         except Exception:
@@ -1084,7 +1144,7 @@ class LkTechnikPathPlanner:
         except Exception:
             pass
 
-    # ------------------- NEU: Felder.csv-Automatik -------------------
+    # ------------------- Felder.csv-Automatik -------------------
     def _on_layers_added(self, layers):
         for lyr in layers:
             try:
@@ -1496,7 +1556,7 @@ class LkTechnikPathPlanner:
             self.dlg.btn_add_field.clicked.connect(self._ui_add_field)
             self.dlg.tree.customContextMenuRequested.connect(self._on_tree_context_menu)
 
-        # NEU: Felder.csv beim Öffnen mit den Feldgrenzen abgleichen.
+        # Felder.csv beim Öffnen mit den Feldgrenzen abgleichen.
         # Dadurch landen neu gezeichnete Felder zuverlässig im Katalog,
         # auch wenn das Commit-Signal nicht gegriffen hat.
         self._sync_all_felder_catalogs()
@@ -1515,7 +1575,7 @@ class LkTechnikPathPlanner:
                 if isinstance(parent, QgsLayerTreeGroup):
                     self._apply_feldgrenzen_color(lyr, parent)
 
-        # NEU: ID-Felder als Feld-Dropdown (Value Relation) konfigurieren.
+        # ID-Felder als Feld-Dropdown (Value Relation) konfigurieren.
         # Muss NACH der Style-Anwendung erfolgen, sonst überschreibt der Style
         # das Editor-Widget wieder.
         self._apply_field_dropdowns()
@@ -1672,7 +1732,7 @@ class LkTechnikPathPlanner:
             frm_group.addLayer(lyr)
             self._apply_predefined_style(lyr)
 
-        # 5) Felder.csv (Feld-Katalog) – NEU
+        # 5) Felder.csv (Feld-Katalog)
         if FELDER_LAYER_NAME not in existing_names:
             csv_path = _felder_csv_path_in_dir(target_dir)
             if not os.path.exists(csv_path):
@@ -2101,6 +2161,13 @@ class LkTechnikPathPlanner:
             gen4_master = os.path.join(path, "MasterData.xml")
             isoxml_taskdata = os.path.join(path, "TASKDATA.XML")
 
+            # 0) AgGPS (Shapefile-Ordnerstruktur)
+            if detect_aggps_data_root(path):
+                ok = import_aggps(self, path, out_dir)
+                if ok:
+                    self.dlg.accept()
+                return
+
             # 1) John Deere Gen4
             if os.path.exists(gen4_master):
                 ok = import_john_deere_gen4(self, path, out_dir)
@@ -2199,7 +2266,7 @@ class LkTechnikPathPlanner:
         project = QgsProject.instance()
         per_frm_layers = {}
         per_frm_groups = {}
-        # NEU: Felder-Katalog je Betrieb
+        # Felder-Katalog je Betrieb
         per_frm_felder_rows = {}    # key -> {id: name}
         per_frm_felder_csv = {}     # key -> csv_pfad oder None (memory)
         per_frm_felder_layer = {}   # key -> Felder-Layer (delimitedtext oder memory)
@@ -2289,7 +2356,7 @@ class LkTechnikPathPlanner:
                 ctr_name = _norm_name(ctr_name)
                 frm_name = _norm_name(frm_name)
 
-            # >>> NEU: Cache-Key nach Namen, nicht nach ID <<<
+            # >>> Cache-Key nach Namen, nicht nach ID <<<
             key = (ctr_name, frm_name)
 
             # Wenn bereits existiert -> zusammenführen (gleiches Layer-Set wiederverwenden)
@@ -2308,7 +2375,7 @@ class LkTechnikPathPlanner:
 
             layers = _persist_frm_layers(layers, ctr_name, frm_name, frm_group)
 
-            # NEU: Felder-Katalog (Felder.csv) für diesen Betrieb vorbereiten
+            # Felder-Katalog (Felder.csv) für diesen Betrieb vorbereiten
             per_frm_felder_rows.setdefault(key, {})
             if out_dir:
                 base = os.path.join(out_dir, _safe(ctr_name), _safe(frm_name))
@@ -2379,7 +2446,7 @@ class LkTechnikPathPlanner:
 
             frm_layers, _grp, _frm_key = _ensure_frm(frm_ref or "__UNBENANNT_FRM__", ctr_name_hint)
 
-            # NEU: jedes Feld (PFD) im Katalog registrieren – auch ohne Feldgrenze.
+            # jedes Feld (PFD) im Katalog registrieren – auch ohne Feldgrenze.
             # Vorhandenen, nicht-leeren Namen nicht durch einen leeren überschreiben.
             _cur_rows = per_frm_felder_rows.setdefault(_frm_key, {})
             _new_name = pfd_name or ""
@@ -2391,8 +2458,9 @@ class LkTechnikPathPlanner:
             dp_field = field_layer.dataProvider(); dp_line = line_layer.dataProvider()
             dp_point = point_layer.dataProvider(); dp_area = area_layer.dataProvider()
 
-            # Boundary + Area obstacles
-            pln = pfd.find("PLN")
+            # Boundary - explizit PolygonType "1" (Partfield Boundary), sonst koennte bei
+            # Feldern ohne Grenze faelschlich eine Hindernis-PLN (Typ 6/8) als Grenze gelesen werden.
+            pln = pfd.find("PLN[@A='1']")
             if pln is not None:
                 lsg_field = pln.find("LSG[@A='1']")
                 if lsg_field is not None:
@@ -2409,12 +2477,8 @@ class LkTechnikPathPlanner:
                             ring_pts.append(_tx_pt_xy(lon, lat))
 
                     if len(ring_pts) > 2:
-                        final_area_val = area_val
-
-                        if not final_area_val or final_area_val <= 0:
-                            calc_area = _calc_area_from_ring_wgs84(ring_pts_wgs84)
-                            if calc_area > 0:
-                                final_area_val = calc_area
+                        # Fläche IMMER aus der Geometrie berechnen (nie aus der Datei).
+                        final_area_val = _calc_area_from_ring_wgs84(ring_pts_wgs84)
 
                         feat_f = QgsFeature(field_layer.fields())
                         feat_f.setAttribute("ID", numeric_id)
@@ -2422,8 +2486,32 @@ class LkTechnikPathPlanner:
                         feat_f.setAttribute("Flaeche", final_area_val)
                         feat_f.setGeometry(QgsGeometry.fromPolygonXY([ring_pts]))
                         dp_field.addFeatures([feat_f])
+
+            # Area obstacles - neues, normgerechtes Format: eigene PLN mit
+            # PolygonType "6" (Obstacle, nicht befahrbar) oder "8" (Other, befahrbar).
+            for hind_pln in pfd.findall("PLN"):
+                hind_type = hind_pln.get("A")
+                if hind_type not in ("6", "8"):
+                    continue
+                bf_val = 1 if hind_type == "8" else 0
+                for lsg_hind in hind_pln.findall("LSG"):
+                    ring2 = []
+                    for pnt2 in lsg_hind.findall("PNT"):
+                        if pnt2.get("A") in ("10", "2"):
+                            lat2 = float(pnt2.get("C", "0")); lon2 = float(pnt2.get("D", "0"))
+                            ring2.append(_tx_pt_xy(lon2, lat2))
+                    if len(ring2) > 2:
+                        feat_a = QgsFeature(area_layer.fields())
+                        feat_a.setAttribute("ID", numeric_id); feat_a.setAttribute("befahrbar", bf_val)
+                        feat_a.setGeometry(QgsGeometry.fromPolygonXY([ring2]))
+                        dp_area.addFeatures([feat_a])
+
+            # Area obstacles - Legacy-Format aus aelteren Exporten (< Fix vom Juli 2026):
+            # P094_Impassable war ein nicht-normkonformes Custom-Attribut auf einer LSG,
+            # verschachtelt in der ersten PLN. Bleibt fuer den Import alter Dateien erhalten.
+            if pln is not None:
                 for lsg_area in pln.findall("LSG"):
-                    if lsg_area.get("A") == "2":
+                    if lsg_area.get("A") == "2" and lsg_area.get("P094_Impassable") is not None:
                         impass = lsg_area.get("P094_Impassable", "0")
                         bf_val = 1 if impass == "0" else 0
                         ring2 = []
@@ -2437,12 +2525,22 @@ class LkTechnikPathPlanner:
                             feat_a.setGeometry(QgsGeometry.fromPolygonXY([ring2]))
                             dp_area.addFeatures([feat_a])
 
+
+
             # Point obstacles
             for pnt_h in pfd.findall("PNT"):
                 a_attr = pnt_h.get("A", "")
                 if a_attr in ["1", "2", "5"]:
                     lat = float(pnt_h.get("C", "0")); lon = float(pnt_h.get("D", "0"))
-                    hind_name = pnt_h.get("B", ""); bf_val = 0 if a_attr == "5" else 1
+                    hind_name = pnt_h.get("B", "")
+                    if is_v3:
+                        # v3 kennt kein PointType "Obstacle" (5, erst ab v4) - beim Export wird
+                        # ein nicht befahrbares Hindernis deshalb als "2"=other geschrieben
+                        # (siehe Export-Fix). Beim Import muss das spiegelbildlich wieder als
+                        # nicht befahrbar erkannt werden, sonst geht die Information verloren.
+                        bf_val = 1 if a_attr == "1" else 0
+                    else:
+                        bf_val = 0 if a_attr == "5" else 1
                     feat_pt = QgsFeature(point_layer.fields())
                     feat_pt.setAttribute("ID", numeric_id); feat_pt.setAttribute("Name", hind_name); feat_pt.setAttribute("befahrbar", bf_val)
                     feat_pt.setGeometry(QgsGeometry.fromPointXY(_tx_pt_xy(lon, lat)))
@@ -2495,7 +2593,7 @@ class LkTechnikPathPlanner:
             for lyr in layers.values():
                 lyr.updateExtents()
 
-        # NEU: Felder-Katalog je Betrieb schreiben / füllen
+        # Felder-Katalog je Betrieb schreiben / füllen
         for key, rows in per_frm_felder_rows.items():
             csv_path = per_frm_felder_csv.get(key)
             felder_layer = per_frm_felder_layer.get(key)
@@ -2525,7 +2623,7 @@ class LkTechnikPathPlanner:
                     felder_layer.dataProvider().addFeatures(feats)
                     felder_layer.updateExtents()
 
-        # NEU: Feld-Dropdown (Value Relation) direkt nach dem Import setzen,
+        # Feld-Dropdown (Value Relation) direkt nach dem Import setzen,
         # damit die Attributtabelle sofort den Feldnamen/Dropdown zeigt und
         # nicht erst beim nächsten Öffnen des Path Planners.
         self._apply_field_dropdowns()
@@ -2597,9 +2695,19 @@ class LkTechnikPathPlanner:
 
 
         out_dir = self.dlg.out_line.text().strip()
-        is_john_deere = self.dlg.chk_jd_gen4.isChecked()
-        is_v3 = self.dlg.chk_v3.isChecked()
-        use_segments = (self.dlg.chk_seg.isChecked() and not is_v3 and not is_john_deere)
+
+        # Exportformat aus dem gewählten Terminal ableiten
+        term_brand, term_model, term_fmt = self.dlg.selected_terminal()
+        if term_fmt is None:
+            self.iface.messageBar().pushMessage(
+                "Fehler", "Bitte ein Terminal auswählen.", level=Qgis.Warning, duration=4
+            )
+            return
+        is_aggps = (term_fmt == "AgGPS")
+        is_john_deere = (term_fmt == "Gen4")
+        is_v3 = (term_fmt == "3.3")
+        # Kontursegmente nur für Fendt One
+        use_segments = (self.dlg.chk_seg.isChecked() and _is_fendt_one(term_brand, term_model))
         smooth_curves = self.dlg.chk_smooth_curves.isChecked()
         smooth_iterations = int(self.dlg.spin_smooth_iterations.value())
         smooth_max_dev = float(self.dlg.spin_smooth_max_dev.value())
@@ -2622,6 +2730,33 @@ class LkTechnikPathPlanner:
                 level=Qgis.Info, duration=4
             )
             return
+
+        if is_aggps:
+            try:
+                ok = export_aggps(self, out_dir, selected)
+                if ok:
+                    self.iface.messageBar().pushMessage(
+                        "Erfolgreich",
+                        f"AgGPS-Export erstellt: {os.path.join(out_dir, 'AgGPS', 'Data')}",
+                        level=Qgis.Success,
+                        duration=4
+                    )
+                    self.dlg.accept()
+                else:
+                    self.iface.messageBar().pushMessage(
+                        "Hinweis",
+                        "Für die Auswahl gab es keine exportierbaren Daten.",
+                        level=Qgis.Info, duration=5
+                    )
+                return
+            except Exception as e:
+                self.iface.messageBar().pushMessage(
+                    "Fehler",
+                    f"AgGPS-Export fehlgeschlagen: {e}",
+                    level=Qgis.Critical,
+                    duration=6
+                )
+                return
 
         if is_john_deere:
             try:
@@ -2648,15 +2783,18 @@ class LkTechnikPathPlanner:
 
         root_xml = ET.Element('ISO11783_TaskData', {
             "VersionMajor": "3" if is_v3 else "4",
-            "VersionMinor": "0",
+            # v3.3-Schema: VersionMinor ist "fixed" auf "3" (ISO11783_TaskFile_V3-3.xsd).
+            # v4.3-Schema erlaubt 0-3; wir schreiben ebenfalls "3" fuer volle 4.3-Konformitaet.
+            "VersionMinor": "3",
             "ManagementSoftwareManufacturer": "LK-Technik Mold",
-            "ManagementSoftwareVersion": "1.7.0",
+            "ManagementSoftwareVersion": "2.0.0",
             "DataTransferOrigin": "1"
         })
 
         ctr_idx = 1
         frm_idx = 1
         pnt_global = 1
+        pln_global = 1
         ggp_global = 1
         gpn_global = 1
 
@@ -2668,6 +2806,13 @@ class LkTechnikPathPlanner:
 
         def _make_pfd_id(ctr_num: int, frm_num: int, field_id: int) -> str:
             return f"PFD{ctr_num:0{CTR_WIDTH}d}{frm_num:0{FRM_WIDTH}d}{field_id:0{FIELD_WIDTH}d}"
+
+        def _fmt_coord(value) -> str:
+            """PointNorth/PointEast (PNT@C/@D) normgerecht formatieren.
+            ISO11783_Common_V4-3.xsd begrenzt beide Attribute auf max. 9 Nachkommastellen
+            (xs:fractionDigits=9). In v3 gibt es diese Grenze zwar nicht, aber 9 Nachkommastellen
+            entsprechen ohnehin < 0.1 mm Genauigkeit, daher einheitlich fuer v3 und v4 gerundet."""
+            return f"{float(value):.9f}"
         
         def next_ggp_id():
             nonlocal ggp_global
@@ -2737,7 +2882,7 @@ class LkTechnikPathPlanner:
                 fh_layer = _find_child_layer_by_name(frm_group, "Flaechenhindernis")
 
                 if not polygon_layer:
-                    # NEU: ohne Feldgrenzen-Layer nur überspringen, wenn auch
+                    # ohne Feldgrenzen-Layer nur überspringen, wenn auch
                     # kein Feld-Katalog (Felder.csv) vorhanden ist.
                     if not _field_catalog_for_frm(frm_group):
                         continue
@@ -3378,7 +3523,7 @@ class LkTechnikPathPlanner:
                 name_field = _pick_field(poly_fmap, "Name")
                 area_field = _pick_field(poly_fmap, "Flaeche")
 
-                # NEU: Export läuft über den Feld-Katalog (Felder.csv) statt über
+                # Export läuft über den Feld-Katalog (Felder.csv) statt über
                 # die Feldgrenzen. Dadurch werden auch Felder OHNE Feldgrenze
                 # exportiert; mehrere Feldgrenzen pro Feld sind möglich.
                 catalog = _field_catalog_for_frm(frm_group)
@@ -3428,7 +3573,6 @@ class LkTechnikPathPlanner:
 
                     #Boundary – je Feldgrenze EINE eigene PLN mit EIGENEM Namen (B).
                     # Mehrere Grenzen pro Feld können so unterschiedlich heißen.
-                    # pln_element zeigt auf die erste PLN (für Flächenhindernisse).
                     # Felder ohne Grenze erhalten ein PFD ohne PLN.
                     pln_element = None
                     for bf in boundaries:
@@ -3445,9 +3589,14 @@ class LkTechnikPathPlanner:
                             except Exception:
                                 barea = field_area
 
-                        this_pln = ET.SubElement(pfd_element, 'PLN', {
-                            'A': '1', 'B': str(bname), 'C': str(int(barea)), 'E': f'PLN{field_id}'
-                        })
+                        pln_attrs = {'A': '1', 'B': str(bname), 'C': str(int(barea))}
+                        if not is_v3:
+                            # PolygonId (E) gibt es erst ab v4 und muss dokumentweit eindeutig sein
+                            # (xs:ID) - daher ein global fortlaufender Zaehler statt field_id, das bei
+                            # mehreren Grenzen pro Feld sonst mehrfach vergeben wuerde.
+                            pln_attrs['E'] = f'PLN{pln_global}'
+                            pln_global += 1
+                        this_pln = ET.SubElement(pfd_element, 'PLN', pln_attrs)
                         if pln_element is None:
                             pln_element = this_pln
 
@@ -3462,7 +3611,7 @@ class LkTechnikPathPlanner:
                             for ring in polygon:
                                 for pt in ring:
                                     lon, lat = _to_wgs_xy_from_point(pt, ct_poly)
-                                    ET.SubElement(lsg_field, 'PNT', {'A': '2', 'C': str(lat), 'D': str(lon)})
+                                    ET.SubElement(lsg_field, 'PNT', {'A': '2', 'C': _fmt_coord(lat), 'D': _fmt_coord(lon)})
 
                     #Area obstacles
                     if fh_layer is not None:
@@ -3478,14 +3627,17 @@ class LkTechnikPathPlanner:
                             except Exception:
                                 continue
                             bf_val = fh_feature['befahrbar'] if 'befahrbar' in fh_names else 0
-                            impass_val = "1" if bf_val == 0 else "0"
-                            # Falls das Feld keine Feldgrenze hat, PLN hier nachträglich anlegen,
-                            # damit Flächenhindernisse ein gültiges Eltern-Element haben.
-                            if pln_element is None:
-                                pln_element = ET.SubElement(pfd_element, 'PLN', {
-                                    'A': '1', 'B': str(field_name), 'C': str(int(field_area)), 'E': f'PLN{field_id}'
-                                })
-                            lsg_hind = ET.SubElement(pln_element, 'LSG', {'A': '2', 'P094_Impassable': impass_val})
+                            # Normgerecht: statt eines Custom-Attributs (P094_Impassable, das es in
+                            # keiner ISOXML-Version gibt) bekommt jedes Flaechenhindernis eine eigene
+                            # PLN mit offiziellem PolygonType: "6"=Obstacle (nicht befahrbar) bzw.
+                            # "8"=Other (befahrbar, aber markierte Flaeche).
+                            hind_poly_type = '6' if bf_val == 0 else '8'
+                            hind_pln_attrs = {'A': hind_poly_type, 'C': str(0)}
+                            if not is_v3:
+                                hind_pln_attrs['E'] = f'PLN{pln_global}'
+                                pln_global += 1
+                            hind_pln = ET.SubElement(pfd_element, 'PLN', hind_pln_attrs)
+                            lsg_hind = ET.SubElement(hind_pln, 'LSG', {'A': '1'})
                             fh_geom = fh_feature.geometry()
                             polys2 = fh_geom.asMultiPolygon() or []
                             if not polys2:
@@ -3496,7 +3648,7 @@ class LkTechnikPathPlanner:
                                 for ring2 in poly2:
                                     for pt2 in ring2:
                                         lon2, lat2 = _to_wgs_xy_from_point(pt2, ct_area)
-                                        ET.SubElement(lsg_hind, 'PNT', {'A': '10', 'C': str(lat2), 'D': str(lon2)})
+                                        ET.SubElement(lsg_hind, 'PNT', {'A': '2', 'C': _fmt_coord(lat2), 'D': _fmt_coord(lon2)})
 
                     #Point obstacles
                     if point_layer is not None:
@@ -3512,12 +3664,20 @@ class LkTechnikPathPlanner:
                             except Exception:
                                 continue
                             bf_val = hindernis['befahrbar'] if 'befahrbar' in p_names else 1
-                            a_val = "1" if bf_val == 1 else "5"
+                            if is_v3:
+                                # v3 PointType kennt nur 1=Flag und 2=other, kein Obstacle-Typ (5).
+                                a_val = "1" if bf_val == 1 else "2"
+                            else:
+                                a_val = "1" if bf_val == 1 else "5"
                             hind_name = hindernis['name'] if 'name' in p_names else (hindernis['Name'] if 'Name' in p_names else '')
                             pt_geom = hindernis.geometry().asPoint()
                             lonp, latp = _to_wgs_xy_from_point(pt_geom, ct_point)
-                            g_val = f"PNT{pnt_global}"; pnt_global += 1
-                            ET.SubElement(pfd_element, 'PNT', {'A': a_val, 'B': hind_name, 'C': str(latp), 'D': str(lonp), 'G': g_val})
+                            pnt_attrs = {'A': a_val, 'B': hind_name, 'C': _fmt_coord(latp), 'D': _fmt_coord(lonp)}
+                            if not is_v3:
+                                # PointId (G) gibt es erst ab v4
+                                pnt_attrs['G'] = f"PNT{pnt_global}"
+                                pnt_global += 1
+                            ET.SubElement(pfd_element, 'PNT', pnt_attrs)
 
                     #Swaths
                     if line_layer is not None:
@@ -3552,9 +3712,11 @@ class LkTechnikPathPlanner:
 
                                 for line in lines:
                                     lsg_line = ET.SubElement(pfd_element, 'LSG', {'A': '5', 'B': track_name})
-                                    for i, pt in enumerate(line):
-                                        a_val = '6' if i == 0 else ('7' if i == len(line)-1 else '9')
-                                        ET.SubElement(lsg_line, 'PNT', {'A': a_val, 'C': str(pt.y()), 'D': str(pt.x())})
+                                    for pt in line:
+                                        # v3 kennt kein PointType 6/7/9 (Guidance Reference A/B, Guidance
+                                        # Point) - diese Typen gibt es erst ab v4. In v3 ist fuer normale
+                                        # Stuetzpunkte einer Linie nur "2" (other) zulaessig.
+                                        ET.SubElement(lsg_line, 'PNT', {'A': '2', 'C': _fmt_coord(pt.y()), 'D': _fmt_coord(pt.x())})
                         else:
                             if use_segments:
                                 line_fmap = _field_map(line_layer)              # lowercase -> echter Feldname
@@ -3614,7 +3776,7 @@ class LkTechnikPathPlanner:
                                             inner_lsg = ET.SubElement(gpn_element, 'LSG', {'A': '5'})
                                             for i, pt in enumerate(line):
                                                 a_val = '6' if i == 0 else ('7' if i == len(line)-1 else '9')
-                                                ET.SubElement(inner_lsg, 'PNT', {'A': a_val, 'C': str(pt.y()), 'D': str(pt.x())})
+                                                ET.SubElement(inner_lsg, 'PNT', {'A': a_val, 'C': _fmt_coord(pt.y()), 'D': _fmt_coord(pt.x())})
                                 for track_feature in non_segment:
                                     lines = _export_lines_from_feature(
                                         track_feature,
@@ -3646,7 +3808,7 @@ class LkTechnikPathPlanner:
                                         inner_lsg_extra = ET.SubElement(gpn_extra, 'LSG', {'A': '5'})
                                         for i, pt in enumerate(line):
                                             a_val = '6' if i == 0 else ('7' if i == len(line)-1 else '9')
-                                            ET.SubElement(inner_lsg_extra, 'PNT', {'A': a_val, 'C': str(pt.y()), 'D': str(pt.x())})
+                                            ET.SubElement(inner_lsg_extra, 'PNT', {'A': a_val, 'C': _fmt_coord(pt.y()), 'D': _fmt_coord(pt.x())})
                             else:
                                 line_fmap = _field_map(line_layer)
                                 id_attr   = _pick_field(line_fmap, "ID", "field_id")
@@ -3706,8 +3868,8 @@ class LkTechnikPathPlanner:
                                             a_val = "6" if i == 0 else ("7" if i == len(line) - 1 else "9")
                                             ET.SubElement(lsg_element_, 'PNT', {
                                                 'A': a_val,
-                                                'C': str(pt.y()),
-                                                'D': str(pt.x())
+                                                'C': _fmt_coord(pt.y()),
+                                                'D': _fmt_coord(pt.x())
                                             })
                     exported_any = True
 

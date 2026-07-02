@@ -635,7 +635,7 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
             lyr.updateExtents()
 
     # -------------------------------------------------
-    # NEU: Felder-Katalog (Felder.csv) je Betrieb schreiben
+    # Felder-Katalog (Felder.csv) je Betrieb schreiben
     # -------------------------------------------------
     try:
         try:
