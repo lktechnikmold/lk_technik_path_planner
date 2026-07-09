@@ -33,7 +33,7 @@ Copyright- und Autorhinweise (Florian Köck, LK-Technik Mold) erhalten bleiben.
 
 Author: Florian Köck
 Institution: LK-Technik Mold
-Version: 2.0.0
+Version: 2.0.1
 Date: 2026-07-02
 """
 
@@ -131,24 +131,18 @@ FELDER_CSV_DELIM = ";"
 #               "Gen4" = John Deere Gen4, "AgGPS" = Trimble/Case/NH
 # ============================================================
 TERMINALS = [
-    ("ISOXML", "v3.3", "3.3"),
-    ("ISOXML", "v4.2", "4.2"),
     ("Case/Steyr", "AFS Pro 700", "3.3"),
     ("Case/Steyr", "AFS Pro 1200", "4.2"),
     ("Case/Steyr", "FM 750", "AgGPS"),
     ("Case/Steyr", "FM 1000", "AgGPS"),
-    ("CHC", "NAV", "4.2"),
-    ("CCI", "1200", "4.2"),
     ("Claas", "Cemis 1200", "4.2"),
     ("Claas", "S10", "3.3"),
     ("Deutz", "iMonitor 3", "4.2"),
     ("Fendt", "One", "4.2"),
-    ("Fendt", "Vario Terminal NT01", "4.2"),
-    ("FJ", "Dynamics", "4.2"),
+    ("Fendt", "Vario Terminal INT 01", "4.2"),
     ("John Deere", "GS4", "Gen4"),
     ("John Deere", "GS5", "Gen4"),
     ("John Deere", "GS5+", "Gen4"),
-    ("Lacos", "LC:ONE", "4.2"),
     ("Massey Ferguson", "Datatronic 5", "4.2"),
     ("Massey Ferguson", "Fieldstar 5", "4.2"),
     ("New Holland", "FM 750", "AgGPS"),
@@ -158,7 +152,6 @@ TERMINALS = [
     ("Raven", "CR12", "4.2"),
     ("Raven", "Viper 4", "4.2"),
     ("Raven", "Viper 4+", "4.2"),
-    ("Sveaverken", "Autosteer", "4.2"),
     ("Topcon", "X25", "4.2"),
     ("Topcon", "X35", "4.2"),
     ("Topcon", "XD", "4.2"),
@@ -178,8 +171,8 @@ DEFAULT_TERMINAL = ("Fendt", "One", "4.2")
 
 def _format_label(fmt: str) -> str:
     return {
-        "3.3": "ISOXML v3.3",
-        "4.2": "ISOXML v4.2",
+        "3.3": "ISOXML v3",
+        "4.2": "ISOXML v4",
         "Gen4": "John Deere Gen4",
         "AgGPS": "AgGPS",
     }.get(fmt, fmt)
@@ -1302,19 +1295,25 @@ class LkTechnikPathPlanner:
 
     def _recreate_felder_layer(self, frm_group: QgsLayerTreeGroup, csv_path: str):
         """
-        Entfernt den vorhandenen Felder-Layer der Gruppe und lädt ihn frisch aus
-        der (gefüllten) CSV. Notwendig, weil ein delimitedtext-Layer, der anfangs
-        aus einer leeren Datei erzeugt wurde, per reload() die Value-Relation-
-        Quelle nicht zuverlässig aktualisiert. Das Neuladen invalidiert zudem den
-        Cache der Value Relation, sodass das Dropdown sofort die Namen zeigt.
+        Aktualisiert den Felder-Layer der Gruppe aus der (gefüllten) CSV.
+
+        WICHTIG: Der Layer wird NICHT entfernt und neu angelegt, sondern
+        in-place neu geladen, damit seine Layer-ID stabil bleibt. Sonst zeigen
+        die Value-Relation-Dropdowns der anderen Layer auf eine nicht mehr
+        existierende Felder-Layer-ID ("… erfordert den Layer 'Felder' …").
+        Nur wenn noch kein Felder-Layer existiert, wird er neu geladen.
         """
         project = QgsProject.instance()
         old = _find_child_layer(frm_group, FELDER_LAYER_NAME)
         if old is not None:
             try:
-                project.removeMapLayer(old.id())
+                old.dataProvider().reloadData()
+                old.reload()
+                old.updateExtents()
+                old.triggerRepaint()
             except Exception:
                 pass
+            return old
         new_layer = _load_felder_layer(csv_path)
         if new_layer is not None:
             project.addMapLayer(new_layer, False)
@@ -1385,10 +1384,15 @@ class LkTechnikPathPlanner:
                     felder = new_layer
         if felder is None:
             return
-        felder_id = felder.id()
-
+        # WICHTIG: KEINE Layer-ID ("Layer") speichern. Eine gespeicherte Layer-ID
+        # erzeugt in QGIS eine harte Abhängigkeit; passt die ID nach Neuladen/
+        # Re-Import/Projektöffnen nicht exakt, erscheint die Warnung
+        # "Layer 'Feldgrenzen' erfordert den Layer 'Felder' …".
+        # Über LayerSource/LayerName/LayerProviderName wird der Felder-Layer
+        # zuverlässig aufgelöst (jede Betriebs-Felder.csv hat einen eindeutigen
+        # Pfad) – ohne ID-Abhängigkeit.
         config = {
-            "Layer": felder_id,
+            "Layer": "",
             "LayerName": FELDER_LAYER_NAME,
             "LayerSource": felder.publicSource(),
             "LayerProviderName": felder.providerType(),
@@ -2778,8 +2782,14 @@ class LkTechnikPathPlanner:
                     duration=6
                 )
                 return
+        
+        if not os.path.exists(out_dir + "/TASKDATA"):
+            os.makedirs(out_dir + "/TASKDATA")
 
-        output_file_path = os.path.join(out_dir, "TASKDATA.XML")
+        out_dir_taskdata = out_dir + "/TASKDATA"
+
+
+        output_file_path = os.path.join(out_dir_taskdata, "TASKDATA.XML")
 
         root_xml = ET.Element('ISO11783_TaskData', {
             "VersionMajor": "3" if is_v3 else "4",
@@ -2787,7 +2797,7 @@ class LkTechnikPathPlanner:
             # v4.3-Schema erlaubt 0-3; wir schreiben ebenfalls "3" fuer volle 4.3-Konformitaet.
             "VersionMinor": "3",
             "ManagementSoftwareManufacturer": "LK-Technik Mold",
-            "ManagementSoftwareVersion": "2.0.0",
+            "ManagementSoftwareVersion": "2.0.1",
             "DataTransferOrigin": "1"
         })
 

@@ -247,13 +247,10 @@ def export_john_deere_gen4(plugin, out_dir, selected):
     ET.register_namespace("", "urn:schemas-johndeere-com:Setup")
     ET.register_namespace("xsi", "http://www.w3.org/2001/XMLSchema-instance")
     ET.register_namespace("xsd", "http://www.w3.org/2001/XMLSchema")
+    ET.register_namespace("sc", "urn:schemas-johndeere-com:SetupCore")
 
     root_xml = ET.Element(
-        "{urn:schemas-johndeere-com:Setup}SetupFile",
-        {
-            "{http://www.w3.org/2001/XMLSchema-instance}schemaLocation":
-                "urn:schemas-johndeere-com:Setup"
-        }
+        "{urn:schemas-johndeere-com:Setup}SetupFile"
     )
 
     ET.SubElement(root_xml, "{urn:schemas-johndeere-com:Setup}SourceApp", {
@@ -288,6 +285,7 @@ def export_john_deere_gen4(plugin, out_dir, selected):
     abline_defs = []
     flag_category_defs = {}
     flag_defs = []
+    boundary_defs = []   # OperationalBoundary erst am Ende schreiben (Reihenfolge!)
 
     flag_category_guid_befahrbar = _ensure_flag_category("Hindernis befahrbar", False)
     flag_category_guid_nicht_befahrbar = _ensure_flag_category("Hindernis nicht befahrbar", True)
@@ -327,43 +325,73 @@ def export_john_deere_gen4(plugin, out_dir, selected):
 
             
             polygon_layer = _find_child_layer_by_name(frm_group, "Feldgrenzen")
-            if not polygon_layer:
+
+            # Katalog-getrieben exportieren (Felder.csv): ein Feld je Feld-ID,
+            # mehrere Feldgrenzen pro Feld, und Felder ohne Grenze (nur Fahrspuren).
+            try:
+                try:
+                    from .lk_technik_path_planner import _field_catalog_for_frm
+                except Exception:
+                    from lk_technik_path_planner import _field_catalog_for_frm
+                catalog = _field_catalog_for_frm(frm_group)  # [(id, name), ...]
+            except Exception:
+                catalog = []
+
+            # Fallback: kein Katalog vorhanden -> aus Feldgrenzen ableiten
+            if not catalog and polygon_layer:
+                _pf = _field_map(polygon_layer)
+                _idf = _pick_field(_pf, "ID")
+                _nmf = _pick_field(_pf, "Name")
+                seen = {}
+                for f in polygon_layer.getFeatures():
+                    try:
+                        _fid = int(f[_idf]) if _idf else int(f.id())
+                    except Exception:
+                        continue
+                    if _fid not in seen:
+                        seen[_fid] = str(f[_nmf]) if _nmf else "Feld_%s" % _fid
+                catalog = sorted(seen.items())
+
+            if not catalog:
                 continue
 
-            ct_poly = _to_wgs84_transform(polygon_layer)
-
-            poly_fmap = _field_map(polygon_layer)
+            ct_poly = _to_wgs84_transform(polygon_layer) if polygon_layer else None
+            poly_fmap = _field_map(polygon_layer) if polygon_layer else {}
             id_field = _pick_field(poly_fmap, "ID")
             name_field = _pick_field(poly_fmap, "Name")
+
+            # Feldgrenzen nach Feld-ID gruppieren (0..n Grenzen je Feld)
+            boundary_by_id = {}
+            if polygon_layer is not None:
+                for bf in polygon_layer.getFeatures():
+                    try:
+                        _bid = int(bf[id_field]) if id_field else int(bf.id())
+                    except Exception:
+                        continue
+                    boundary_by_id.setdefault(_bid, []).append(bf)
 
             field_ids_filter = selected[ctr_name][frm_name]
             field_guid_map = {}
 
-            for field_feature in polygon_layer.getFeatures():
-                raw_id = field_feature[id_field] if id_field else field_feature.id()
-                try:
-                    field_id = int(raw_id)
-                except Exception:
-                    field_id = int(field_feature.id())
-
+            for field_id, cat_name in catalog:
                 if (field_ids_filter is not None) and (field_id not in field_ids_filter):
                     continue
 
-                field_name = str(field_feature[name_field]) if name_field else f"Feld_{field_id}"
+                boundaries = boundary_by_id.get(field_id, [])
 
-                geometry = _polygon_feature_to_geojson_geometry(field_feature, ct_poly)
-                if geometry is None:
-                    continue
+                # Feldname: Feldgrenze bevorzugt, sonst Katalogname
+                field_name = cat_name or ("Feld_%s" % field_id)
+                if boundaries and name_field:
+                    try:
+                        _bn = boundaries[0][name_field]
+                        if _bn not in (None, ""):
+                            field_name = str(_bn)
+                    except Exception:
+                        pass
 
-                boundary_guid = _new_guid()
+                # GENAU EIN Feld je Feld-ID
                 field_guid = _new_guid()
                 field_guid_map[field_id] = field_guid
-
-                
-
-                boundary_filename = f"Boundary{boundary_guid}.gjson"
-                boundary_path = os.path.join(spatial_dir, boundary_filename)
-                _write_boundary_geojson(boundary_path, geometry)
 
                 field_el = ET.SubElement(setup_el, "{urn:schemas-johndeere-com:Setup}Field", {
                     "CreationDate": timestamp,
@@ -377,23 +405,38 @@ def export_john_deere_gen4(plugin, out_dir, selected):
                 farm_ref_el = ET.SubElement(field_el, "{urn:schemas-johndeere-com:Setup}Farm")
                 farm_ref_el.text = farm_guid
 
-                # Feldgrenze direkt unter <Setup> anlegen und mit dem Feld verknüpfen
-                boundary_el = ET.SubElement(setup_el, "{urn:schemas-johndeere-com:Setup}OperationalBoundary", {
-                    "CreationDate": "1970-01-01T00:00:00Z",
-                    "SourceNode": source_node_guid,
-                    "LastModifiedDate": timestamp,
-                    "Archived": "false",
-                    "StringGuid": boundary_guid,
-                    "TaggedEntity": field_guid,
-                    "Name": timestamp
-                })
+                # je vorhandener Feldgrenze eine eigene OperationalBoundary,
+                # aber alle mit demselben Feld (TaggedEntity = field_guid) verknuepft.
+                # WICHTIG: Die OperationalBoundary-Elemente werden NICHT hier,
+                # sondern erst am Ende geschrieben (nach Guidance) – die John-Deere-
+                # Struktur verlangt: erst alle Felder, dann Guidance, dann alle
+                # OperationalBoundaries. Interleaving macht die Datei am Terminal ungueltig.
+                for bf in boundaries:
+                    geometry = _polygon_feature_to_geojson_geometry(bf, ct_poly)
+                    if geometry is None:
+                        continue
 
-                geometry_el = ET.SubElement(boundary_el, "{urn:schemas-johndeere-com:Setup}Geometry")
-                fname_el = ET.SubElement(geometry_el, "{urn:schemas-johndeere-com:Setup}FilenameWithExtension")
-                fname_el.text = boundary_filename
+                    boundary_guid = _new_guid()
+                    boundary_filename = f"Boundary{boundary_guid}.gjson"
+                    boundary_path = os.path.join(spatial_dir, boundary_filename)
+                    _write_boundary_geojson(boundary_path, geometry)
 
-                path_el = ET.SubElement(geometry_el, "{urn:schemas-johndeere-com:Setup}Path")
-                path_el.text = "./SpatialFiles/"
+                    # Name der Grenze: eigener Name der Feldgrenze, sonst Feldname
+                    b_name = field_name
+                    if name_field:
+                        try:
+                            _bn = bf[name_field]
+                            if _bn not in (None, ""):
+                                b_name = str(_bn)
+                        except Exception:
+                            pass
+
+                    boundary_defs.append({
+                        "StringGuid": boundary_guid,
+                        "TaggedEntity": field_guid,
+                        "Name": b_name,
+                        "FilenameWithExtension": boundary_filename,
+                    })
 
                 exported_any = True
 
@@ -757,6 +800,42 @@ def export_john_deere_gen4(plugin, out_dir, selected):
                 "Value": td["Heading"],
                 "SourceUnit": "arcdeg"
             })
+
+    # -------------------------------------------------
+    # OperationalBoundaries schreiben – NACH Guidance (JD-Reihenfolge!)
+    # inkl. SignalType und SetupCore-Versionsmarken wie im Operations-Center-Export
+    # -------------------------------------------------
+    for bd in boundary_defs:
+        boundary_el = ET.SubElement(setup_el, "{urn:schemas-johndeere-com:Setup}OperationalBoundary", {
+            "CreationDate": _utc_now_iso(),
+            "SourceNode": source_node_guid,
+            "LastModifiedDate": _utc_now_iso(),
+            "Archived": "false",
+            "StringGuid": bd["StringGuid"],
+            "TaggedEntity": bd["TaggedEntity"],
+            "Name": bd["Name"]
+        })
+
+        ET.SubElement(boundary_el, "{urn:schemas-johndeere-com:Setup}SignalType", {
+            "Representation": "dtSignalType",
+            "Value": "dtiSignalTypeUnknown"
+        })
+
+        geometry_el = ET.SubElement(boundary_el, "{urn:schemas-johndeere-com:Setup}Geometry")
+        ET.SubElement(geometry_el, "{urn:schemas-johndeere-com:Setup}FilenameWithExtension").text = bd["FilenameWithExtension"]
+        ET.SubElement(geometry_el, "{urn:schemas-johndeere-com:Setup}Path").text = "./SpatialFiles/"
+
+        ET.SubElement(boundary_el, "{urn:schemas-johndeere-com:SetupCore}VersionDelimiter").text = "Version 2.54"
+        ET.SubElement(boundary_el, "{urn:schemas-johndeere-com:SetupCore}VersionsEnd").text = "End"
+
+    # -------------------------------------------------
+    # SourceInformation + CreatedDateTime (Abschluss von <Setup>)
+    # -------------------------------------------------
+    src_info_el = ET.SubElement(setup_el, "{urn:schemas-johndeere-com:Setup}SourceInformation")
+    ET.SubElement(src_info_el, "{urn:schemas-johndeere-com:Setup}DisplayName").text = "GS4_4600"
+    ET.SubElement(src_info_el, "{urn:schemas-johndeere-com:Setup}Version").text = "1.0.0.0"
+    ET.SubElement(src_info_el, "{urn:schemas-johndeere-com:Setup}SourceApplication").text = "Setup Builder"
+    ET.SubElement(setup_el, "{urn:schemas-johndeere-com:Setup}CreatedDateTime").text = _utc_now_iso()
 
     # -------------------------------------------------
     # XML schreiben
