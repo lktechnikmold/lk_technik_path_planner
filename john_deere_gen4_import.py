@@ -289,6 +289,35 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
 
         return QgsGeometry.fromMultiPolygonXY(polygons), source_polygons
 
+    def _iter_polygons_from_geojson_geometry(geom_json):
+        """
+        Liefert JEDES Polygon einer GeoJSON-Geometrie einzeln als
+        (rings_xy, rings_src). Ein MultiPolygon wird so in seine Einzel-
+        polygone aufgeteilt -> je Polygon eine eigene Feldgrenze.
+        """
+        gtype = geom_json.get("type")
+        coords = geom_json.get("coordinates", [])
+        if gtype == "Polygon":
+            coords = [coords]
+        elif gtype != "MultiPolygon":
+            return
+        for poly in coords:
+            rings_xy = []
+            rings_src = []
+            for ring in poly:
+                pts = []
+                src_ring = []
+                for c in ring:
+                    if len(c) < 2:
+                        continue
+                    src_ring.append([float(c[0]), float(c[1])])
+                    pts.append(_tx_xy(c[0], c[1]))
+                if len(pts) >= 3:
+                    rings_xy.append(pts)
+                    rings_src.append(src_ring)
+            if rings_xy:
+                yield rings_xy, rings_src
+
     def _multiline_from_geojson_geometry(geom_json):
         gtype = geom_json.get("type")
         coords = geom_json.get("coordinates", [])
@@ -421,6 +450,12 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
         if not farm_guid:
             continue
 
+        # Grenzenname aus dem OperationalBoundary-Element (Attribut Name);
+        # ist er leer/nicht vorhanden, heißt die Feldgrenze wie das Feld.
+        boundary_name = ob.get("Name")
+        if boundary_name is None or not str(boundary_name).strip():
+            boundary_name = field_info["name"]
+
         geom_el = ob.find("jd:Geometry", ns)
         if geom_el is None:
             continue
@@ -442,28 +477,31 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
         if not features:
             continue
 
-        geom_json = features[0].get("geometry")
-        if not geom_json:
-            continue
-
-        qgs_geom, source_polygons = _polygon_from_geojson_geometry(geom_json)
-        if qgs_geom is None:
-            continue
-
         layers = _ensure_farm_layers(farm_guid)
         layer = layers["Feldgrenzen"]
 
-        feat = QgsFeature(layer.fields())
-        feat.setAttribute("ID", int(field_info["field_id"]))
-        feat.setAttribute("Name", field_info["name"])
-        calc_area = 0.0
-        if source_polygons:
-            for poly_rings in source_polygons:
-                calc_area += _calc_area_from_ring_coords_wgs84(poly_rings)
+        # ALLE Features UND jedes Polygon einzeln einlesen: ein MultiPolygon
+        # (bzw. mehrere Features) wird in je eine Feldgrenze pro Polygon mit
+        # derselben Feld-ID aufgeteilt (analog zum ISOXML-Import).
+        boundary_feats = []
+        for feature in features:
+            geom_json = feature.get("geometry")
+            if not geom_json:
+                continue
+            for rings_xy, rings_src in _iter_polygons_from_geojson_geometry(geom_json):
+                if not rings_xy:
+                    continue
+                # Fläche IMMER aus der Geometrie berechnen (nie aus der Datei).
+                calc_area = _calc_area_from_ring_coords_wgs84(rings_src)
+                feat = QgsFeature(layer.fields())
+                feat.setAttribute("ID", int(field_info["field_id"]))
+                feat.setAttribute("Name", boundary_name)
+                feat.setAttribute("Flaeche", calc_area)
+                feat.setGeometry(QgsGeometry.fromPolygonXY(rings_xy))
+                boundary_feats.append(feat)
 
-        feat.setAttribute("Flaeche", calc_area)
-        feat.setGeometry(qgs_geom)
-        layer.dataProvider().addFeatures([feat])
+        if boundary_feats:
+            layer.dataProvider().addFeatures(boundary_feats)
 
     # -------------------------------------------------
     # ABLine importieren

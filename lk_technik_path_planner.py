@@ -33,7 +33,7 @@ Copyright- und Autorhinweise (Florian Köck, LK-Technik Mold) erhalten bleiben.
 
 Author: Florian Köck
 Institution: LK-Technik Mold
-Version: 2.0.1
+Version: 2.0.0
 Date: 2026-07-02
 """
 
@@ -578,39 +578,6 @@ class ToolboxDialog(QDialog):
         self.adv_export_widget = QWidget()
         adv_layout = QFormLayout(self.adv_export_widget)
         adv_layout.setContentsMargins(24, 4, 4, 4)
-
-        self.chk_smooth_curves = QCheckBox("Kurven glätten")
-
-        self.spin_smooth_iterations = QDoubleSpinBox()
-        self.spin_smooth_iterations.setDecimals(0)
-        self.spin_smooth_iterations.setRange(1, 10)
-        self.spin_smooth_iterations.setSingleStep(1)
-        self.spin_smooth_iterations.setValue(3)
-        self.spin_smooth_iterations.setEnabled(False)
-
-        self.spin_smooth_max_dev = QDoubleSpinBox()
-        self.spin_smooth_max_dev.setDecimals(2)
-        self.spin_smooth_max_dev.setRange(0.01, 20.0)
-        self.spin_smooth_max_dev.setSingleStep(0.10)
-        self.spin_smooth_max_dev.setValue(0.05)
-        self.spin_smooth_max_dev.setSuffix(" m")
-        self.spin_smooth_max_dev.setEnabled(False)
-
-        def _toggle_smooth(enabled):
-            self.spin_smooth_iterations.setEnabled(enabled)
-            self.spin_smooth_max_dev.setEnabled(enabled)
-
-        self.chk_smooth_curves.toggled.connect(_toggle_smooth)
-
-        smooth_row = QHBoxLayout()
-        smooth_row.addWidget(self.chk_smooth_curves)
-        smooth_row.addWidget(QLabel("Iterationen:"))
-        smooth_row.addWidget(self.spin_smooth_iterations)
-        smooth_row.addWidget(QLabel("Max. Verschiebung:"))
-        smooth_row.addWidget(self.spin_smooth_max_dev)
-        smooth_row.addStretch(1)
-
-        adv_layout.addRow(smooth_row)
 
         self.chk_densify_curves = QCheckBox("Kurven nach Intervall verdichten")
         self.spin_densify_interval = QDoubleSpinBox()
@@ -2464,10 +2431,15 @@ class LkTechnikPathPlanner:
 
             # Boundary - explizit PolygonType "1" (Partfield Boundary), sonst koennte bei
             # Feldern ohne Grenze faelschlich eine Hindernis-PLN (Typ 6/8) als Grenze gelesen werden.
-            pln = pfd.find("PLN[@A='1']")
-            if pln is not None:
-                lsg_field = pln.find("LSG[@A='1']")
-                if lsg_field is not None:
+            pln = pfd.find("PLN[@A='1']")   # erste Grenz-PLN (fuer Legacy-Hindernis-Block unten)
+
+            # Boundary - ALLE PLN mit PolygonType "1" (Partfield Boundary) einlesen.
+            # Mehrere PLN A=1 (bzw. mehrere LSG A=1) pro PFD = Multipolygon-Grenze:
+            # je Polygon eine eigene Feldgrenzen-Feature mit derselben Feld-ID.
+            # Das entspricht dem Export (eine PLN je Feldgrenze) -> sauberer Roundtrip.
+            boundary_feats = []
+            for pln_b in pfd.findall("PLN[@A='1']"):
+                for lsg_field in pln_b.findall("LSG[@A='1']"):
                     ring_pts = []
                     ring_pts_wgs84 = []
 
@@ -2484,12 +2456,21 @@ class LkTechnikPathPlanner:
                         # Fläche IMMER aus der Geometrie berechnen (nie aus der Datei).
                         final_area_val = _calc_area_from_ring_wgs84(ring_pts_wgs84)
 
+                        # Grenzenname aus PLN@B (PolygonDesignator). Ist er leer oder
+                        # nicht vorhanden, heißt die Feldgrenze wie das Feld (PFD@C).
+                        bname = pln_b.get("B")
+                        if _is_nullish(bname) or not str(bname).strip():
+                            bname = pfd_name
+
                         feat_f = QgsFeature(field_layer.fields())
                         feat_f.setAttribute("ID", numeric_id)
-                        feat_f.setAttribute("Name", pfd_name)
+                        feat_f.setAttribute("Name", bname)
                         feat_f.setAttribute("Flaeche", final_area_val)
                         feat_f.setGeometry(QgsGeometry.fromPolygonXY([ring_pts]))
-                        dp_field.addFeatures([feat_f])
+                        boundary_feats.append(feat_f)
+
+            if boundary_feats:
+                dp_field.addFeatures(boundary_feats)
 
             # Area obstacles - neues, normgerechtes Format: eigene PLN mit
             # PolygonType "6" (Obstacle, nicht befahrbar) oder "8" (Other, befahrbar).
@@ -2712,9 +2693,6 @@ class LkTechnikPathPlanner:
         is_v3 = (term_fmt == "3.3")
         # Kontursegmente nur für Fendt One
         use_segments = (self.dlg.chk_seg.isChecked() and _is_fendt_one(term_brand, term_model))
-        smooth_curves = self.dlg.chk_smooth_curves.isChecked()
-        smooth_iterations = int(self.dlg.spin_smooth_iterations.value())
-        smooth_max_dev = float(self.dlg.spin_smooth_max_dev.value())
         densify_curves = self.dlg.chk_densify_curves.isChecked()
         densify_interval_m = float(self.dlg.spin_densify_interval.value())
         extend_curves = self.dlg.chk_extend_curves.isChecked()
@@ -2797,7 +2775,7 @@ class LkTechnikPathPlanner:
             # v4.3-Schema erlaubt 0-3; wir schreiben ebenfalls "3" fuer volle 4.3-Konformitaet.
             "VersionMinor": "3",
             "ManagementSoftwareManufacturer": "LK-Technik Mold",
-            "ManagementSoftwareVersion": "2.0.1",
+            "ManagementSoftwareVersion": "2.0.0",
             "DataTransferOrigin": "1"
         })
 
@@ -2940,284 +2918,7 @@ class LkTechnikPathPlanner:
                         pass
 
                     return QgsCoordinateReferenceSystem("EPSG:32633")
-                def _clone_geometry(geom):
-                    try:
-                        return QgsGeometry(geom)
-                    except Exception:
-                        return QgsGeometry(geom.constGet().clone())
 
-
-                def _geometry_to_metric_32633(geom, source_layer):
-                    if geom is None or geom.isEmpty():
-                        return None
-
-                    geom_copy = _clone_geometry(geom)
-
-                    source_crs = source_layer.crs()
-                    metric_crs = QgsCoordinateReferenceSystem("EPSG:32633")
-
-                    if source_crs.isValid() and source_crs != metric_crs:
-                        try:
-                            ct = QgsCoordinateTransform(source_crs, metric_crs, QgsProject.instance())
-                            geom_copy.transform(ct)
-                        except Exception:
-                            return None
-
-                    return geom_copy
-
-
-                def _geometry_from_32633_to_wgs84(geom):
-                    if geom is None or geom.isEmpty():
-                        return None
-
-                    geom_copy = _clone_geometry(geom)
-
-                    src = QgsCoordinateReferenceSystem("EPSG:32633")
-                    dst = QgsCoordinateReferenceSystem("EPSG:4326")
-
-                    try:
-                        ct = QgsCoordinateTransform(src, dst, QgsProject.instance())
-                        geom_copy.transform(ct)
-                    except Exception:
-                        return None
-
-                    return geom_copy
-
-
-                def _point_inside(p, field_geom):
-                    p_geom = QgsGeometry.fromPointXY(QgsPointXY(p))
-                    return field_geom.contains(p_geom) or field_geom.intersects(p_geom)
-
-
-                def _push_inside(p, field_geom):
-                    p_geom = QgsGeometry.fromPointXY(p)
-
-                    if field_geom.isMultipart():
-                        polygons = field_geom.asMultiPolygon()
-                        ring = polygons[0][0]
-                    else:
-                        polygons = field_geom.asPolygon()
-                        ring = polygons[0]
-
-                    boundary = QgsGeometry.fromPolylineXY(ring)
-                    nearest = boundary.nearestPoint(p_geom).asPoint()
-
-                    dx = nearest.x() - p.x()
-                    dy = nearest.y() - p.y()
-                    dist = math.sqrt(dx * dx + dy * dy)
-
-                    if dist == 0:
-                        return QgsPointXY(nearest)
-
-                    inside_push = 0.10
-                    factor = (dist + inside_push) / dist
-
-                    candidate = QgsPointXY(
-                        p.x() + dx * factor,
-                        p.y() + dy * factor
-                    )
-
-                    if _point_inside(candidate, field_geom):
-                        return candidate
-
-                    return QgsPointXY(nearest)
-
-
-                def _smooth_geometry_direct(geom, iterations):
-                    if QgsWkbTypes.isMultiType(geom.wkbType()):
-                        return geom
-
-                    pts = geom.asPolyline()
-
-                    for _ in range(iterations):
-                        if len(pts) < 2:
-                            break
-
-                        new_pts = [pts[0]]
-
-                        for i in range(len(pts) - 1):
-                            p0 = QgsPointXY(pts[i])
-                            p1 = QgsPointXY(pts[i + 1])
-
-                            q = QgsPointXY(
-                                0.75 * p0.x() + 0.25 * p1.x(),
-                                0.75 * p0.y() + 0.25 * p1.y()
-                            )
-
-                            r = QgsPointXY(
-                                0.25 * p0.x() + 0.75 * p1.x(),
-                                0.25 * p0.y() + 0.75 * p1.y()
-                            )
-
-                            new_pts.append(q)
-                            new_pts.append(r)
-
-                        new_pts.append(pts[-1])
-                        pts = new_pts
-
-                    return QgsGeometry.fromPolylineXY(pts)
-
-
-                def _correct_line_before_smoothing(line, field_geom, iterations, max_dev):
-                    if len(line) < 3:
-                        return [QgsPointXY(p) for p in line]
-
-                    current = [QgsPointXY(p) for p in line]
-                    prep_passes = 3
-                    inside_push = 0.10
-
-                    for _ in range(prep_passes):
-                        base_geom = QgsGeometry.fromPolylineXY(current)
-                        smooth_geom = _smooth_geometry_direct(base_geom, iterations)
-
-                        for i in range(1, len(current) - 1):
-                            orig_p = current[i]
-
-                            station = base_geom.lineLocatePoint(
-                                QgsGeometry.fromPointXY(orig_p)
-                            )
-
-                            smooth_p = smooth_geom.interpolate(station).asPoint()
-                            smooth_p = QgsPointXY(smooth_p)
-
-                            if _point_inside(smooth_p, field_geom):
-                                continue
-
-                            dx = smooth_p.x() - orig_p.x()
-                            dy = smooth_p.y() - orig_p.y()
-                            dist = math.sqrt(dx * dx + dy * dy)
-
-                            if dist == 0:
-                                continue
-
-                            move_dist = min(dist + inside_push, max_dev)
-
-                            candidate = QgsPointXY(
-                                orig_p.x() - dx / dist * move_dist,
-                                orig_p.y() - dy / dist * move_dist
-                            )
-
-                            if not _point_inside(candidate, field_geom):
-                                candidate = _push_inside(candidate, field_geom)
-
-                            current[i] = candidate
-
-                    return current
-
-
-                def _smooth_single_geometry(feature, crs, iterations):
-                    wkb = feature.geometry().wkbType()
-
-                    if QgsWkbTypes.isMultiType(wkb):
-                        geom_type = "MultiLineString"
-                    else:
-                        geom_type = "LineString"
-
-                    layer = QgsVectorLayer(
-                        "{}?crs={}".format(geom_type, crs.authid()),
-                        "temp_line",
-                        "memory"
-                    )
-
-                    provider = layer.dataProvider()
-                    provider.addAttributes(feature.fields())
-                    layer.updateFields()
-
-                    new_feat = QgsFeature(layer.fields())
-                    new_feat.setAttributes(feature.attributes())
-                    new_feat.setGeometry(feature.geometry())
-
-                    provider.addFeature(new_feat)
-                    layer.updateExtents()
-
-                    result = processing.run(
-                        "native:smoothgeometry",
-                        {
-                            "INPUT": layer,
-                            "ITERATIONS": iterations,
-                            "OFFSET": 0.25,
-                            "MAX_ANGLE": 180,
-                            "OUTPUT": "memory:"
-                        }
-                    )
-
-                    out_layer = result["OUTPUT"]
-
-                    for f in out_layer.getFeatures():
-                        return f.geometry()
-
-                    return feature.geometry()
-
-
-                def _smooth_geometry_for_export(track_feature, line_layer, polygon_layer, field_feature, iterations, max_dev):
-                    """
-                    Glättet Fahrspuren innerhalb der Feldgrenze.
-                    Intern wird immer EPSG:32633 verwendet.
-                    Rückgabe ist WGS84-Geometrie.
-                    """
-
-                    geom = track_feature.geometry()
-                    if geom is None or geom.isEmpty():
-                        return None
-
-                    track_geom_32633 = _geometry_to_metric_32633(geom, line_layer)
-                    field_geom_32633 = _geometry_to_metric_32633(field_feature.geometry(), polygon_layer)
-
-                    if track_geom_32633 is None or field_geom_32633 is None:
-                        return None
-
-                    field_parts = []
-
-                    if field_geom_32633.isMultipart():
-                        for poly in field_geom_32633.asMultiPolygon():
-                            field_parts.append(QgsGeometry.fromPolygonXY(poly))
-                    else:
-                        poly = field_geom_32633.asPolygon()
-                        if poly:
-                            field_parts.append(QgsGeometry.fromPolygonXY(poly))
-
-                    if not field_parts:
-                        return None
-
-                    field_union = QgsGeometry.unaryUnion(field_parts)
-
-                    if QgsWkbTypes.isMultiType(track_geom_32633.wkbType()):
-                        lines = track_geom_32633.asMultiPolyline()
-                        corrected_lines = []
-
-                        for line in lines:
-                            corrected = _correct_line_before_smoothing(
-                                line,
-                                field_union,
-                                iterations,
-                                max_dev
-                            )
-                            corrected_lines.append(corrected)
-
-                        corrected_geom = QgsGeometry.fromMultiPolylineXY(corrected_lines)
-
-                    else:
-                        line = track_geom_32633.asPolyline()
-
-                        corrected_line = _correct_line_before_smoothing(
-                            line,
-                            field_union,
-                            iterations,
-                            max_dev
-                        )
-
-                        corrected_geom = QgsGeometry.fromPolylineXY(corrected_line)
-
-                    temp_feat = QgsFeature(track_feature)
-                    temp_feat.setGeometry(corrected_geom)
-
-                    final_geom_32633 = _smooth_single_geometry(
-                        temp_feat,
-                        QgsCoordinateReferenceSystem("EPSG:32633"),
-                        iterations
-                    )
-
-                    return _geometry_from_32633_to_wgs84(final_geom_32633)
 
                 def _densify_geometry_for_export(geom, source_layer, interval_m):
                     """
@@ -3439,11 +3140,6 @@ class LkTechnikPathPlanner:
                 def _export_lines_from_feature(
                     track_feature,
                     line_layer,
-                    field_feature=None,
-                    polygon_layer=None,
-                    smooth_enabled=False,
-                    smooth_iterations=3,
-                    smooth_max_dev=0.5,
                     densify_enabled=False,
                     interval_m=1.0,
                     extend_enabled=False,
@@ -3452,7 +3148,6 @@ class LkTechnikPathPlanner:
                     """
                     Gibt exportierbare Linien als Liste von Polylinien in WGS84 zurück.
                     Optional:
-                    - Glätten nur bei Kurven (>2 Punkte)
                     - Verdichtung nur bei Kurven (>2 Punkte)
                     - Verlängerung an Anfang und Ende nur bei Kurven (>2 Punkte)
                     """
@@ -3469,28 +3164,6 @@ class LkTechnikPathPlanner:
                     working_geom = geom
                     working_layer = line_layer
 
-                    # 0) optional glätten
-                    if smooth_enabled and has_curve and field_feature is not None and polygon_layer is not None:
-                        smoothed_geom = _smooth_geometry_for_export(
-                            track_feature,
-                            line_layer,
-                            polygon_layer,
-                            field_feature,
-                            smooth_iterations,
-                            smooth_max_dev
-                        )
-
-                        if smoothed_geom is not None and not smoothed_geom.isEmpty():
-                            working_geom = smoothed_geom
-
-                            # WICHTIG:
-                            # Ab hier liegt die Geometrie bereits in WGS84.
-                            working_layer = QgsVectorLayer(
-                                "MultiLineString?crs=EPSG:4326",
-                                "temp_wgs84_lines",
-                                "memory"
-                            )
-
                     # 1) optional verdichten
                     if densify_enabled and has_curve:
                         densified_geom = _densify_geometry_for_export(working_geom, working_layer, interval_m)
@@ -3506,8 +3179,7 @@ class LkTechnikPathPlanner:
                     # working_geom liegt nach den Export-Hilfsfunktionen in WGS84,
                     # wenn eine Bearbeitung aktiv war. Sonst noch nach WGS84 transformieren.
                     edited = (
-                        (smooth_enabled and has_curve)
-                        or (densify_enabled and has_curve)
+                        (densify_enabled and has_curve)
                         or (extend_enabled and has_curve)
                     )
 
@@ -3555,8 +3227,7 @@ class LkTechnikPathPlanner:
                         continue
 
                     boundaries = boundary_by_id.get(field_id, [])
-                    # field_feature wird weiter unten für die Glättung genutzt.
-                    # None => Glättung an der Feldgrenze entfällt automatisch.
+                    # erste Feldgrenze (für Name/Fläche des Feldes); None = keine Grenze
                     field_feature = boundaries[0] if boundaries else None
 
                     # PFD-Name = Feld-(Katalog-)Name. Fläche aus der ersten Grenze.
@@ -3709,11 +3380,6 @@ class LkTechnikPathPlanner:
                                 lines = _export_lines_from_feature(
                                     track_feature,
                                     line_layer,
-                                    field_feature=field_feature,
-                                    polygon_layer=polygon_layer,
-                                    smooth_enabled=smooth_curves,
-                                    smooth_iterations=smooth_iterations,
-                                    smooth_max_dev=smooth_max_dev,
                                     densify_enabled=densify_curves,
                                     interval_m=densify_interval_m,
                                     extend_enabled=extend_curves,
@@ -3762,11 +3428,6 @@ class LkTechnikPathPlanner:
                                         lines = _export_lines_from_feature(
                                             track_feature,
                                             line_layer,
-                                            field_feature=field_feature,
-                                            polygon_layer=polygon_layer,
-                                            smooth_enabled=smooth_curves,
-                                            smooth_iterations=smooth_iterations,
-                                            smooth_max_dev=smooth_max_dev,
                                             densify_enabled=densify_curves,
                                             interval_m=densify_interval_m,
                                             extend_enabled=extend_curves,
@@ -3791,11 +3452,6 @@ class LkTechnikPathPlanner:
                                     lines = _export_lines_from_feature(
                                         track_feature,
                                         line_layer,
-                                        field_feature=field_feature,
-                                        polygon_layer=polygon_layer,
-                                        smooth_enabled=smooth_curves,
-                                        smooth_iterations=smooth_iterations,
-                                        smooth_max_dev=smooth_max_dev,
                                         densify_enabled=densify_curves,
                                         interval_m=densify_interval_m,
                                         extend_enabled=extend_curves,
@@ -3847,11 +3503,6 @@ class LkTechnikPathPlanner:
                                     lines = _export_lines_from_feature(
                                         track_feature,
                                         line_layer,
-                                        field_feature=field_feature,
-                                        polygon_layer=polygon_layer,
-                                        smooth_enabled=smooth_curves,
-                                        smooth_iterations=smooth_iterations,
-                                        smooth_max_dev=smooth_max_dev,
                                         densify_enabled=densify_curves,
                                         interval_m=densify_interval_m,
                                         extend_enabled=extend_curves,
