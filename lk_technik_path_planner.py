@@ -2736,47 +2736,52 @@ class LkTechnikPathPlanner:
                     dp_point.addFeatures([feat_pt])
 
             # Swaths
-            if is_v3:
-                for lsg_line in pfd.findall("LSG"):
-                    if lsg_line.get("A") == "5":
-                        track_name = lsg_line.get("B", "")
-                        line_pts = []
-                        for pnt_spur in lsg_line.findall("PNT"):
-                            lat = float(pnt_spur.get("C", "0")); lon = float(pnt_spur.get("D", "0"))
-                            line_pts.append(_tx_pt_xy(lon, lat))
-                        if len(line_pts) >= 2:
-                            feat_line = QgsFeature(line_layer.fields())
-                            feat_line.setAttribute("ID", numeric_id); feat_line.setAttribute("Name", track_name)
-                            feat_line.setGeometry(QgsGeometry.fromPolylineXY(line_pts))
-                            dp_line.addFeatures([feat_line])
-            else:
-                for ggp in pfd.findall("GGP"):
-                    gpn_all = [gpn for gpn in ggp.findall("GPN")]
-                    gpn_tracks = []
-                    for gpn in gpn_all:
-                        lsg_track = gpn.find("LSG[@A='5']")
-                        if lsg_track is not None:
-                            gpn_tracks.append((gpn, lsg_track))
-                    multi = len(gpn_tracks) > 1
-                    ggp_B = ggp.get("B")
-                    seg_label = ggp_B.strip() if (multi and not _is_nullish(ggp_B)) else None
-                    for gpn, lsg_track in gpn_tracks:
-                        gpn_B = gpn.get("B")
-                        if multi:
-                            track_name = (gpn_B or '').strip()
-                        else:
-                            track_name = gpn_B.strip() if not _is_nullish(gpn_B) else (ggp_B or '').strip()
-                        line_pts = []
-                        for pnt_spur in lsg_track.findall("PNT"):
-                            lat = float(pnt_spur.get("C", "0")); lon = float(pnt_spur.get("D", "0"))
-                            line_pts.append(_tx_pt_xy(lon, lat))
-                        if len(line_pts) >= 2:
-                            feat_line = QgsFeature(line_layer.fields())
-                            feat_line.setAttribute("ID", numeric_id); feat_line.setAttribute("Name", track_name)
-                            if seg_label is not None:
-                                feat_line.setAttribute("Segment", seg_label)
-                            feat_line.setGeometry(QgsGeometry.fromPolylineXY(line_pts))
-                            dp_line.addFeatures([feat_line])
+            # Beide Repräsentationen unabhängig von VersionMajor prüfen: manche
+            # Terminals (z.B. CNH/Case) schreiben Spuren auch in "v3"-Dateien
+            # als echte ISO-Guidance-Patterns (GGP/GPN) statt als flaches
+            # <LSG A="5"> direkt in <PFD>. pfd.findall("LSG") findet nur
+            # DIREKTE Kinder von PFD, also keine Überschneidung/Doppelzählung
+            # mit den in GGP/GPN verschachtelten LSG-Elementen weiter unten.
+            for lsg_line in pfd.findall("LSG"):
+                if lsg_line.get("A") == "5":
+                    track_name = lsg_line.get("B", "")
+                    line_pts = []
+                    for pnt_spur in lsg_line.findall("PNT"):
+                        lat = float(pnt_spur.get("C", "0")); lon = float(pnt_spur.get("D", "0"))
+                        line_pts.append(_tx_pt_xy(lon, lat))
+                    if len(line_pts) >= 2:
+                        feat_line = QgsFeature(line_layer.fields())
+                        feat_line.setAttribute("ID", numeric_id); feat_line.setAttribute("Name", track_name)
+                        feat_line.setGeometry(QgsGeometry.fromPolylineXY(line_pts))
+                        dp_line.addFeatures([feat_line])
+
+            for ggp in pfd.findall("GGP"):
+                gpn_all = [gpn for gpn in ggp.findall("GPN")]
+                gpn_tracks = []
+                for gpn in gpn_all:
+                    lsg_track = gpn.find("LSG[@A='5']")
+                    if lsg_track is not None:
+                        gpn_tracks.append((gpn, lsg_track))
+                multi = len(gpn_tracks) > 1
+                ggp_B = ggp.get("B")
+                seg_label = ggp_B.strip() if (multi and not _is_nullish(ggp_B)) else None
+                for gpn, lsg_track in gpn_tracks:
+                    gpn_B = gpn.get("B")
+                    if multi:
+                        track_name = (gpn_B or '').strip()
+                    else:
+                        track_name = gpn_B.strip() if not _is_nullish(gpn_B) else (ggp_B or '').strip()
+                    line_pts = []
+                    for pnt_spur in lsg_track.findall("PNT"):
+                        lat = float(pnt_spur.get("C", "0")); lon = float(pnt_spur.get("D", "0"))
+                        line_pts.append(_tx_pt_xy(lon, lat))
+                    if len(line_pts) >= 2:
+                        feat_line = QgsFeature(line_layer.fields())
+                        feat_line.setAttribute("ID", numeric_id); feat_line.setAttribute("Name", track_name)
+                        if seg_label is not None:
+                            feat_line.setAttribute("Segment", seg_label)
+                        feat_line.setGeometry(QgsGeometry.fromPolylineXY(line_pts))
+                        dp_line.addFeatures([feat_line])
 
         for layers in per_frm_layers.values():
             for lyr in layers.values():
