@@ -33,7 +33,7 @@ Copyright- und Autorhinweise (Florian Köck, LK-Technik Mold) erhalten bleiben.
 
 Author: Florian Köck
 Institution: LK-Technik Mold
-Version: 2.1.0
+Version: 2.1.1
 Date: 2026-07-28
 """
 
@@ -3006,7 +3006,7 @@ class LkTechnikPathPlanner:
             # v4.3-Schema erlaubt 0-3; wir schreiben ebenfalls "3" fuer volle 4.3-Konformitaet.
             "VersionMinor": "3",
             "ManagementSoftwareManufacturer": "LK-Technik Mold",
-            "ManagementSoftwareVersion": "2.1.0",
+            "ManagementSoftwareVersion": "2.1.1",
             "DataTransferOrigin": "1"
         })
 
