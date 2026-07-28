@@ -131,15 +131,20 @@ FELDER_CSV_DELIM = ";"
 #               "Gen4" = John Deere Gen4, "AgGPS" = Trimble/Case/NH
 # ============================================================
 TERMINALS = [
+    ("ISOXML", "v3", "3.3"),
+    ("ISOXML", "v4", "4.2"),
     ("Case/Steyr", "AFS Pro 700", "3.3"),
     ("Case/Steyr", "AFS Pro 1200", "4.2"),
     ("Case/Steyr", "FM 750", "AgGPS"),
     ("Case/Steyr", "FM 1000", "AgGPS"),
+    ("Case/Steyr", "S-Fleet Pro", "4.2"),
+    ("CHC", "NAV", "4.2"),
     ("Claas", "Cemis 1200", "4.2"),
     ("Claas", "S10", "3.3"),
     ("Deutz", "iMonitor 3", "4.2"),
     ("Fendt", "One", "4.2"),
     ("Fendt", "Vario Terminal INT 01", "4.2"),
+    ("FJ", "Dynamics", "4.2"),
     ("John Deere", "GS4", "Gen4"),
     ("John Deere", "GS5", "Gen4"),
     ("John Deere", "GS5+", "Gen4"),
@@ -152,6 +157,7 @@ TERMINALS = [
     ("Raven", "CR12", "4.2"),
     ("Raven", "Viper 4", "4.2"),
     ("Raven", "Viper 4+", "4.2"),
+    ("Sveaverken", "Autosteer", "4.2"),
     ("Topcon", "X25", "4.2"),
     ("Topcon", "X35", "4.2"),
     ("Topcon", "XD", "4.2"),
