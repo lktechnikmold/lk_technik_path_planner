@@ -5,6 +5,44 @@ Alle nennenswerten Änderungen an diesem Plugin werden in dieser Datei dokumenti
 Das Format orientiert sich an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und das Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [2.1.0] - 2026-07-28
+
+**Mehrsprachigkeit (Deutsch/Englisch)** sowie mehrere Stabilitätsfixes rund um
+Layer-Namen und das Feld-Dropdown.
+
+### Hinzugefügt
+- **Sprachumstellung Deutsch/Englisch**: Dropdown oben rechts im Path Planner
+  (über dem Logo). Die Wahl wird dauerhaft gespeichert (auch über
+  QGIS-Neustarts hinweg).
+- Bei aktivem Englisch werden die Layer im Layers-Panel wirklich umbenannt:
+  `Felder` → `Fields`, `Feldgrenzen` → `Boundaries`, `Fahrspuren` → `Swaths`,
+  `Punkthindernis` → `PointFeature`, `Flächenhindernis` → `AreaFeature`.
+- Spalten-Aliase in der Attributtabelle passend zur Sprache, z. B.
+  `Flaeche` → `Area`, `befahrbar` → `Passable`. Die Spalte `ID`
+  (Feld-Zuordnung) heißt jetzt `Feld` (Deutsch) bzw. `Field` (Englisch)
+  statt `ID`.
+- Alle Buttons, Dialoge, Tooltips und Meldungen des Plugins sind vollständig
+  übersetzt.
+
+### Geändert
+- Logo im Path Planner vergrößert, Kopfzeile neu angeordnet (Sprachauswahl
+  oben rechts über dem Logo) für eine aufgeräumtere Oberfläche.
+- Das Feld-Dropdown (Value-Relation für die ID-Spalte) sowie Styles, Farben
+  und der Feld-Katalog-Abgleich werden jetzt automatisch beim **Öffnen eines
+  Projekts** eingerichtet – nicht mehr erst, nachdem der Path Planner einmal
+  manuell geöffnet wurde.
+
+### Behoben
+- Layer-Namen bleiben jetzt in jeder Sprache eindeutig auffindbar: Alle
+  internen Layer-Suchen (Style-Zuordnung, Feldgrenzen-Einfärbung,
+  Felder.csv-Automatik, ISOXML/John-Deere/AgGPS-Export) erkennen sowohl den
+  deutschen als auch den englischen Layer-Namen. Dadurch konnte beim
+  Anlegen eines neuen Feldes kein doppelter `Felder`/`Fields`-Katalog-Layer
+  mehr entstehen; bereits doppelt vorhandene Kataloglayer werden automatisch
+  bereinigt.
+- Fehlendes Feld-Dropdown, wenn nach dem Öffnen eines Projekts direkt (ohne
+  vorheriges Öffnen des Path Planners) eine neue Feldgrenze angelegt wurde.
+
 ## [2.0.0] - 2026-07-02
 
 Erste Veröffentlichung der neuen Generation mit **Feld-Katalog**, **Terminal-Auswahl**

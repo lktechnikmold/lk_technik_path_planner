@@ -37,15 +37,12 @@ def export_john_deere_gen4(plugin, out_dir, selected):
                 return n
         return None
 
-    def _find_child_layer_by_name(group: QgsLayerTreeGroup, name: str):
-        for node in group.children():
-            try:
-                lyr = node.layer()
-            except Exception:
-                lyr = None
-            if isinstance(lyr, QgsVectorLayer) and lyr.name() == name:
-                return lyr
-        return None
+    # Layer-Suche aus dem Hauptmodul (kanon-namen-bewusst: findet den Layer
+    # unabhängig davon, ob er gerade Deutsch oder Englisch benannt ist).
+    try:
+        from .lk_technik_path_planner import _find_child_layer as _find_child_layer_by_name
+    except Exception:
+        from lk_technik_path_planner import _find_child_layer as _find_child_layer_by_name
 
     def _iter_ctr_groups():
         root = QgsProject.instance().layerTreeRoot()

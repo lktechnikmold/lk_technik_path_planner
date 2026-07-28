@@ -2,7 +2,7 @@
 name=LK-Technik Path Planner
 qgisMinimumVersion=3.16
 qgisMaximumVersion=3.99
-version=2.0.0
+version=2.1.0
 author=Florian Köck
 email=florian.koeck@lk-noe.at
 category=Analysis
@@ -28,7 +28,14 @@ about=Plugin for importing and exporting guidance and field data for agricultura
     Developed by Florian Köck (LK-Technik Mold)
 experimental=False
 deprecated=False
-changelog=2.0.0 - Veroeffentlichung: Feld-Katalog, Terminal-Auswahl, AgGPS
+changelog=2.1.0 - Mehrsprachigkeit (Deutsch/Englisch)
+    - Sprachumstellung ueber Dropdown oben rechts im Path Planner, dauerhaft gespeichert.
+    - Layer werden bei Englisch umbenannt: Felder->Fields, Feldgrenzen->Boundaries, Fahrspuren->Swaths, Punkthindernis->PointFeature, Flaechenhindernis->AreaFeature.
+    - Spalten-Aliase je Sprache (Flaeche->Area, befahrbar->Passable); ID-Spalte (Feld-Zuordnung) heisst jetzt Feld/Field statt ID.
+    - Alle Buttons, Dialoge und Meldungen uebersetzt; Logo vergroessert, Kopfzeile neu angeordnet.
+    - Fix: Feld-Dropdown und Layer-Suche funktionieren jetzt zuverlaessig unabhaengig von der Sprache (kein doppelter Felder/Fields-Katalog-Layer mehr).
+    - Fix: Feld-Dropdown wird jetzt automatisch beim Oeffnen eines Projekts eingerichtet, nicht erst nach manuellem Oeffnen des Path Planners.
+    2.0.0 - Veroeffentlichung: Feld-Katalog, Terminal-Auswahl, AgGPS
     - Feld-Katalog (Felder.csv) als zentrale Quelle: Felder ohne Grenze und mehrere Grenzen pro Feld; Felder anlegen/umbenennen/loeschen; Feld-Auswahl per Dropdown.
     - Terminal-Auswahl bestimmt das Exportformat (ISOXML v3/v4, John Deere Gen4, AgGPS); Kontursegmente nur bei Fendt One.
     - AgGPS-Export und -Import (Ordnerstruktur mit boundary/swaths/AreaFeature/PointFeature.shp).

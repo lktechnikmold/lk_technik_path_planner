@@ -33,15 +33,15 @@ Copyright- und Autorhinweise (Florian Köck, LK-Technik Mold) erhalten bleiben.
 
 Author: Florian Köck
 Institution: LK-Technik Mold
-Version: 2.0.0
-Date: 2026-07-02
+Version: 2.1.0
+Date: 2026-07-28
 """
 
 
 import os, os.path, math, csv, xml.etree.ElementTree as ET, xml.dom.minidom
 import processing
 
-from qgis.PyQt.QtCore import Qt, QCoreApplication, QVariant, QUrl, QUrlQuery
+from qgis.PyQt.QtCore import Qt, QVariant, QUrl, QUrlQuery, pyqtSignal
 from qgis.PyQt.QtGui import QIcon, QPixmap, QColor
 try:
     from . import resources
@@ -72,6 +72,11 @@ try:
 except Exception:
     from aggps_import import import_aggps, detect_aggps_data_root
 
+try:
+    from . import translations
+except Exception:
+    import translations
+
 from qgis.core import (
     Qgis, QgsProject, QgsVectorLayer, QgsField, QgsFields, QgsFeature, QgsGeometry, QgsPointXY,
     QgsLayerTreeGroup, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsVectorFileWriter,
@@ -79,7 +84,17 @@ from qgis.core import (
 )
 
 def _tr(message: str) -> str:
-    return QCoreApplication.translate('LK-Technik Path Planner', message)
+    return translations.tr(message)
+
+
+def _display_layer_name(name: str) -> str:
+    """Uebersetzter Anzeigename fuer einen (deutschen oder englischen) Layer-Namen."""
+    return translations.display_layer_name(name)
+
+
+def _canon_layer_name(name: str) -> str:
+    """Deutscher Kanon-Name fuer einen (evtl. bereits uebersetzten) Layer-Namen."""
+    return translations.canonical_layer_name(name)
 
 def _is_nullish(v):
     if v is None:
@@ -317,15 +332,21 @@ def _felder_rows_from_layer(felder_layer: QgsVectorLayer) -> dict:
 
 
 def _find_child_layer(group: QgsLayerTreeGroup, name: str) -> QgsVectorLayer:
-    """Findet einen direkten Kind-Layer einer Gruppe anhand des Namens."""
+    """
+    Findet einen direkten Kind-Layer einer Gruppe anhand des Namens.
+    Vergleicht ueber den Kanon-Namen, damit sowohl der deutsche als auch der
+    (bei aktivem Englisch tatsaechlich umbenannte) englische Layername
+    gefunden werden - siehe translations.canonical_layer_name().
+    """
     if not isinstance(group, QgsLayerTreeGroup):
         return None
+    target = translations.canonical_layer_name(name)
     for node in group.children():
         try:
             lyr = node.layer()
         except Exception:
             lyr = None
-        if isinstance(lyr, QgsVectorLayer) and lyr.name() == name:
+        if isinstance(lyr, QgsVectorLayer) and translations.canonical_layer_name(lyr.name()) == target:
             return lyr
     return None
 
@@ -364,7 +385,7 @@ def _field_catalog_for_frm(frm_group: QgsLayerTreeGroup) -> list:
 class AddFarmDialog(QDialog):
     def __init__(self, customers, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Betrieb hinzufügen")
+        self.setWindowTitle(_tr("Betrieb hinzufügen"))
         self.setMinimumWidth(420)
 
         layout = QFormLayout(self)
@@ -374,14 +395,14 @@ class AddFarmDialog(QDialog):
 
         self.edit_farm_name = QLineEdit()
 
-        layout.addRow("Kunde auswählen:", self.cmb_customer)
-        layout.addRow("Betriebsname:", self.edit_farm_name)
+        layout.addRow(_tr("Kunde auswählen:"), self.cmb_customer)
+        layout.addRow(_tr("Betriebsname:"), self.edit_farm_name)
 
-        crs_group = QGroupBox("KBS")
+        crs_group = QGroupBox(_tr("KBS"))
         crs_row = QHBoxLayout(crs_group)
 
         self.rb_wgs84 = QRadioButton("WGS84 - EPSG:4326")
-        self.rb_project = QRadioButton("Projekt-KBS")
+        self.rb_project = QRadioButton(_tr("Projekt-KBS"))
         self.rb_wgs84.setChecked(True)
 
         self.crs_buttons = QButtonGroup(self)
@@ -395,8 +416,8 @@ class AddFarmDialog(QDialog):
         layout.addRow(crs_group)
 
         btn_row = QHBoxLayout()
-        self.btn_ok = QPushButton("OK")
-        self.btn_cancel = QPushButton("Abbrechen")
+        self.btn_ok = QPushButton(_tr("OK"))
+        self.btn_cancel = QPushButton(_tr("Abbrechen"))
         self.btn_ok.clicked.connect(self.accept)
         self.btn_cancel.clicked.connect(self.reject)
 
@@ -422,7 +443,7 @@ class AddFieldDialog(QDialog):
     """Dialog zum Anlegen eines Feldes (Felder.csv) ohne Feldgrenze."""
     def __init__(self, farm_pairs, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Feld hinzufügen")
+        self.setWindowTitle(_tr("Feld hinzufügen"))
         self.setMinimumWidth(420)
         self._pairs = list(farm_pairs)
 
@@ -433,21 +454,21 @@ class AddFieldDialog(QDialog):
             self.cmb_farm.addItem(f"{ctr} / {frm}")
 
         self.edit_name = QLineEdit()
-        self.edit_name.setPlaceholderText("z.B. Hausacker")
+        self.edit_name.setPlaceholderText(_tr("z.B. Hausacker"))
 
-        layout.addRow("Betrieb:", self.cmb_farm)
-        layout.addRow("Feldname:", self.edit_name)
+        layout.addRow(_tr("Betrieb:"), self.cmb_farm)
+        layout.addRow(_tr("Feldname:"), self.edit_name)
 
-        hint = QLabel(
+        hint = QLabel(_tr(
             "Es wird ein Feld ohne Feldgrenze im Katalog (Felder.csv) angelegt.\n"
             "Die vergebene ID kannst du anschließend den Fahrspuren zuweisen."
-        )
+        ))
         hint.setWordWrap(True)
         layout.addRow(hint)
 
         btn_row = QHBoxLayout()
-        self.btn_ok = QPushButton("OK")
-        self.btn_cancel = QPushButton("Abbrechen")
+        self.btn_ok = QPushButton(_tr("OK"))
+        self.btn_cancel = QPushButton(_tr("Abbrechen"))
         self.btn_ok.clicked.connect(self.accept)
         self.btn_cancel.clicked.connect(self.reject)
         btn_row.addStretch(1)
@@ -466,27 +487,43 @@ class AddFieldDialog(QDialog):
 
 
 class ToolboxDialog(QDialog):
+    languageChanged = pyqtSignal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("LK-Technik Path Planner")
+        self._i18n_entries = []  # (widget, key, setter) - fuer Live-Retranslation
         self.setWindowIcon(QIcon(":/isoxml/icons/logo.png"))
         self.setMinimumWidth(720)
+        self._mk_text(self, "LK-Technik Path Planner", "setWindowTitle")
+
+        logo_lbl = QLabel()
+        pix = QPixmap(":/isoxml/icons/logo.png")
+        if not pix.isNull():
+            logo_lbl.setPixmap(pix.scaledToHeight(110, Qt.SmoothTransformation))
+            self._mk_text(logo_lbl, "LK-Technik Path Planner", "setToolTip")
 
         self.mode_import = QRadioButton("Import")
         self.mode_export = QRadioButton("Export")
         self.mode_export.setChecked(True)
 
-        mode_row = QHBoxLayout()
-        mode_row.addWidget(self.mode_export)
-        mode_row.addWidget(self.mode_import)
-        mode_row.addStretch(1)
-        
-        logo_lbl = QLabel()
-        pix = QPixmap(":/isoxml/icons/logo.png")
-        if not pix.isNull():
-            logo_lbl.setPixmap(pix.scaledToHeight(80, Qt.SmoothTransformation))
-            logo_lbl.setToolTip("LK-Technik Path Planner")
-        mode_row.addWidget(logo_lbl)
+        # Sprach-Dropdown (oben rechts)
+        self.cmb_lang = QComboBox()
+        for code, label in translations.LANGUAGES.items():
+            self.cmb_lang.addItem(label, code)
+        idx = self.cmb_lang.findData(translations.get_language())
+        if idx >= 0:
+            self.cmb_lang.setCurrentIndex(idx)
+        self.cmb_lang.currentIndexChanged.connect(self._on_language_selected)
+
+        right_col = QVBoxLayout()
+        right_col.addWidget(self.cmb_lang, 0, Qt.AlignRight)
+        right_col.addWidget(logo_lbl, 0, Qt.AlignRight)
+
+        top_row = QHBoxLayout()
+        top_row.addWidget(self.mode_export)
+        top_row.addWidget(self.mode_import)
+        top_row.addStretch(1)
+        top_row.addLayout(right_col)
 
         self.stack = QStackedWidget()
         self.page_export = self._build_export_page()
@@ -499,11 +536,11 @@ class ToolboxDialog(QDialog):
         self._sync_mode()
 
         root = QVBoxLayout(self)
-        root.addLayout(mode_row)
+        root.addLayout(top_row)
         root.addWidget(self.stack)
         btn_row = QHBoxLayout()
-        self.run_button = QPushButton("Ausführen")
-        self.cancel_button = QPushButton("Schließen")
+        self.run_button = self._mk_text(QPushButton(), "Ausführen")
+        self.cancel_button = self._mk_text(QPushButton(), "Schließen")
         self.cancel_button.clicked.connect(self.reject)
         btn_row.addStretch(1)
         btn_row.addWidget(self.run_button)
@@ -511,53 +548,77 @@ class ToolboxDialog(QDialog):
         root.addLayout(btn_row)
         self._updating_checks = False
 
+    def _mk_text(self, widget, key, setter="setText"):
+        """Setzt einen uebersetzbaren Text und merkt ihn fuer retranslate_ui() vor."""
+        self._i18n_entries.append((widget, key, setter))
+        getattr(widget, setter)(_tr(key))
+        return widget
+
+    def _on_language_selected(self, idx):
+        code = self.cmb_lang.itemData(idx)
+        if not code or code == translations.get_language():
+            return
+        translations.set_language(code)
+        self.retranslate_ui()
+        self.languageChanged.emit(code)
+
+    def retranslate_ui(self):
+        for widget, key, setter in self._i18n_entries:
+            try:
+                getattr(widget, setter)(_tr(key))
+            except RuntimeError:
+                pass
+        self.tree.setHeaderLabels([_tr("Kunde / Betrieb / Feld")])
+        self._refresh_terminal_format_label()
+
     def _sync_mode(self):
         self.stack.setCurrentIndex(0 if self.mode_export.isChecked() else 1)
 
     def _build_export_page(self):
-        w = QGroupBox("Export-Optionen")
+        w = self._mk_text(QGroupBox(), "Export-Optionen", "setTitle")
         v = QVBoxLayout(w)
 
         # Output path
         path_row = QHBoxLayout()
         self.out_line = QLineEdit()
-        btn = QPushButton("…")
+        btn = self._mk_text(QPushButton(), "…")
         def _pick_file():
             dn = QFileDialog.getExistingDirectory(
-                self, "Zielordner für Export wählen"
+                self, _tr("Zielordner für Export wählen")
             )
             if dn:
                 self.out_line.setText(dn)
 
         btn.clicked.connect(_pick_file)
-        path_row.addWidget(QLabel("Zielordner:"))
+        path_row.addWidget(self._mk_text(QLabel(), "Zielordner:"))
         path_row.addWidget(self.out_line, 1)
         path_row.addWidget(btn)
         v.addLayout(path_row)
 
         # Exportformat über Terminal-Auswahl (bestimmt das Dateiformat automatisch)
         opt_row = QHBoxLayout()
-        opt_row.addWidget(QLabel("Terminal:"))
+        opt_row.addWidget(self._mk_text(QLabel(), "Terminal:"))
         self.cmb_terminal = QComboBox()
         for brand, model, fmt in TERMINALS:
             self.cmb_terminal.addItem(f"{brand} – {model}", (brand, model, fmt))
 
         self.lbl_format = QLabel("")
         # Kontursegmente nur für Fendt One
-        self.chk_seg = QCheckBox("Kontursegmente")
+        self.chk_seg = self._mk_text(QCheckBox(), "Kontursegmente")
 
-        def _on_terminal_changed():
+        def _refresh_terminal_format_label():
             data = self.cmb_terminal.currentData()
             if not data:
                 return
             brand, model, fmt = data
-            self.lbl_format.setText(f"Format: {_format_label(fmt)}")
+            self.lbl_format.setText(f"{_tr('Format:')} {_format_label(fmt)}")
             seg_visible = _is_fendt_one(brand, model)
             self.chk_seg.setVisible(seg_visible)
             if not seg_visible:
                 self.chk_seg.setChecked(False)
 
-        self.cmb_terminal.currentIndexChanged.connect(_on_terminal_changed)
+        self._refresh_terminal_format_label = _refresh_terminal_format_label
+        self.cmb_terminal.currentIndexChanged.connect(self._refresh_terminal_format_label)
 
         opt_row.addWidget(self.cmb_terminal, 1)
         opt_row.addWidget(self.lbl_format)
@@ -571,11 +632,11 @@ class ToolboxDialog(QDialog):
             if d and d[0] == DEFAULT_TERMINAL[0] and d[1] == DEFAULT_TERMINAL[1]:
                 self.cmb_terminal.setCurrentIndex(i)
                 break
-        _on_terminal_changed()
+        self._refresh_terminal_format_label()
 
         # Erweiterte Optionen (einklappbar)
         self.btn_adv_export = QToolButton()
-        self.btn_adv_export.setText("Erweiterte Einstellungen")
+        self._mk_text(self.btn_adv_export, "Erweiterte Einstellungen")
         self.btn_adv_export.setCheckable(True)
         self.btn_adv_export.setChecked(False)
         self.btn_adv_export.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
@@ -585,7 +646,7 @@ class ToolboxDialog(QDialog):
         adv_layout = QFormLayout(self.adv_export_widget)
         adv_layout.setContentsMargins(24, 4, 4, 4)
 
-        self.chk_densify_curves = QCheckBox("Kurven nach Intervall verdichten")
+        self.chk_densify_curves = self._mk_text(QCheckBox(), "Kurven nach Intervall verdichten")
         self.spin_densify_interval = QDoubleSpinBox()
         self.spin_densify_interval.setDecimals(2)
         self.spin_densify_interval.setRange(0.10, 1000.0)
@@ -603,7 +664,7 @@ class ToolboxDialog(QDialog):
 
         adv_layout.addRow(densify_row)
 
-        self.chk_extend_curves = QCheckBox("Kurven an den Enden verlängern")
+        self.chk_extend_curves = self._mk_text(QCheckBox(), "Kurven an den Enden verlängern")
         self.spin_extend_curves = QDoubleSpinBox()
         self.spin_extend_curves.setDecimals(2)
         self.spin_extend_curves.setRange(0.10, 1000.0)
@@ -633,18 +694,18 @@ class ToolboxDialog(QDialog):
 
         # CTR→FRM→Felder tree
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Kunde / Betrieb / Feld"])
+        self.tree.setHeaderLabels([_tr("Kunde / Betrieb / Feld")])
         self.tree.setColumnCount(1)
         self.tree.setSelectionMode(QTreeWidget.NoSelection)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.itemChanged.connect(self._on_tree_item_changed)
-        v.addWidget(QLabel("Wähle, was exportiert werden soll:"))
+        v.addWidget(self._mk_text(QLabel(), "Wähle, was exportiert werden soll:"))
         v.addWidget(self.tree, 1)
         # Buttons: Kunde / Betrieb / Feld hinzufügen
         add_row = QHBoxLayout()
-        self.btn_add_ctr = QPushButton("Kunde hinzufügen")
-        self.btn_add_frm = QPushButton("Betrieb hinzufügen")
-        self.btn_add_field = QPushButton("Feld hinzufügen")
+        self.btn_add_ctr = self._mk_text(QPushButton(), "Kunde hinzufügen")
+        self.btn_add_frm = self._mk_text(QPushButton(), "Betrieb hinzufügen")
+        self.btn_add_field = self._mk_text(QPushButton(), "Feld hinzufügen")
         add_row.addWidget(self.btn_add_ctr)
         add_row.addWidget(self.btn_add_frm)
         add_row.addWidget(self.btn_add_field)
@@ -654,20 +715,20 @@ class ToolboxDialog(QDialog):
         return w
 
     def _build_import_page(self):
-        w = QGroupBox("Import-Optionen")
+        w = self._mk_text(QGroupBox(), "Import-Optionen", "setTitle")
         lay = QFormLayout(w)
 
         self.in_line = QLineEdit()
 
-        btn_file = QPushButton("Datei…")
-        btn_folder = QPushButton("Ordner…")
+        btn_file = self._mk_text(QPushButton(), "Datei…")
+        btn_folder = self._mk_text(QPushButton(), "Ordner…")
 
         def _pick_in_file():
             fn, _ = QFileDialog.getOpenFileName(
                 self,
-                "TASKDATA.XML oder MasterData.xml wählen",
+                _tr("TASKDATA.XML oder MasterData.xml wählen"),
                 '',
-                'XML (*.xml);;Alle Dateien (*)'
+                _tr('XML (*.xml);;Alle Dateien (*)')
             )
             if fn:
                 self.in_line.setText(fn)
@@ -675,7 +736,7 @@ class ToolboxDialog(QDialog):
         def _pick_in_folder():
             dn = QFileDialog.getExistingDirectory(
                 self,
-                "Ordner wählen (Gen4 / AgGPS / ISOXML)"
+                _tr("Ordner wählen (Gen4 / AgGPS / ISOXML)")
             )
             if dn:
                 self.in_line.setText(dn)
@@ -688,31 +749,34 @@ class ToolboxDialog(QDialog):
         h1.addWidget(btn_file)
         h1.addWidget(btn_folder)
 
-        lay.addRow(QLabel("TASKDATA.XML, Gen4- oder AgGPS-Ordner:"), h1)
+        lay.addRow(self._mk_text(QLabel(), "TASKDATA.XML, Gen4- oder AgGPS-Ordner:"), h1)
         self.out_dir_line = QLineEdit()
-        btn_dir = QPushButton("…")
+        btn_dir = self._mk_text(QPushButton(), "…")
         def _pick_dir():
-            dn = QFileDialog.getExistingDirectory(self, "Ausgabe-Ordner (optional)")
+            dn = QFileDialog.getExistingDirectory(self, _tr("Ausgabe-Ordner (optional)"))
             if dn:
                 self.out_dir_line.setText(dn)
         btn_dir.clicked.connect(_pick_dir)
         h2 = QHBoxLayout(); h2.addWidget(self.out_dir_line, 1); h2.addWidget(btn_dir)
-        lay.addRow(QLabel("Ausgabe Ordner (GPKG, optional):"), h2)
+        lay.addRow(self._mk_text(QLabel(), "Ausgabe Ordner (GPKG, optional):"), h2)
 
         #CRS-Auswahl
-        crs_group = QGroupBox("Koordinatensystem für GPKG (Import)")
+        crs_group = self._mk_text(QGroupBox(), "Koordinatensystem für GPKG (Import)", "setTitle")
         crs_row = QHBoxLayout(crs_group)
         self.rb_import_wgs84 = QRadioButton("WGS 84 – EPSG:4326")
-        self.rb_import_project = QRadioButton("Projekt-KBS")
+        self.rb_import_project = self._mk_text(QRadioButton(), "Projekt-KBS")
         self.rb_import_wgs84.setChecked(True)  # Default
-        self.rb_import_wgs84.setToolTip("Geometrien als WGS84 speichern (empfohlen).")
-        self.rb_import_project.setToolTip("Geometrien ins aktuelle Projekt-KBS transformieren und so speichern.")
+        self._mk_text(self.rb_import_wgs84, "Geometrien als WGS84 speichern (empfohlen).", "setToolTip")
+        self._mk_text(self.rb_import_project, "Geometrien ins aktuelle Projekt-KBS transformieren und so speichern.", "setToolTip")
         crs_row.addWidget(self.rb_import_wgs84)
         crs_row.addWidget(self.rb_import_project)
         crs_row.addStretch(1)
         lay.addRow(crs_group)
 
-        lay.addRow(QLabel("Hinweis: Ohne Ausgabe-Ordner werden die Layer als Temporärlayer geladen und können nicht direkt wieder exportiert werden!"))
+        lay.addRow(self._mk_text(
+            QLabel(),
+            "Hinweis: Ohne Ausgabe-Ordner werden die Layer als Temporärlayer geladen und können nicht direkt wieder exportiert werden!"
+        ))
         return w
 
     def refresh_tree(self):
@@ -866,6 +930,7 @@ class ToolboxDialog(QDialog):
 class LkTechnikPathPlanner:
     def __init__(self, iface):
         self.iface = iface
+        translations.load_saved_language()
         self.actions = []
         self.menu = _tr('&LK-Technik Path Planner')
         self.first_start = True
@@ -887,7 +952,7 @@ class LkTechnikPathPlanner:
             "Fahrspuren": "Fahrspuren.qml",
         }
 
-        filename = style_map.get(layer_name)
+        filename = style_map.get(translations.canonical_layer_name(layer_name))
         if not filename:
             return ""
 
@@ -928,8 +993,9 @@ class LkTechnikPathPlanner:
 
             if not ok:
                 self.iface.messageBar().pushMessage(
-                    "Style-Warnung",
-                    f"Style für Layer '{layer.name()}' konnte nicht geladen werden: {msg}",
+                    _tr("Style-Warnung"),
+                    _tr("Style für Layer '{name}' konnte nicht geladen werden: {msg}").format(
+                        name=_display_layer_name(layer.name()), msg=msg),
                     level=Qgis.Warning,
                     duration=4
                 )
@@ -943,8 +1009,9 @@ class LkTechnikPathPlanner:
 
         except Exception as e:
             self.iface.messageBar().pushMessage(
-                "Style-Fehler",
-                f"Fehler beim Laden des Styles für '{layer.name()}': {e}",
+                _tr("Style-Fehler"),
+                _tr("Fehler beim Laden des Styles für '{name}': {e}").format(
+                    name=_display_layer_name(layer.name()), e=e),
                 level=Qgis.Warning,
                 duration=4
             )
@@ -996,7 +1063,7 @@ class LkTechnikPathPlanner:
         Überschreibt nur bei Feldgrenzen die Füllfarbe des Styles.
         Die Farbe wird aus der Position des Betriebs innerhalb des Kunden vergeben.
         """
-        if not layer or layer.name() != "Feldgrenzen":
+        if not layer or translations.canonical_layer_name(layer.name()) != "Feldgrenzen":
             return
 
         try:
@@ -1024,11 +1091,77 @@ class LkTechnikPathPlanner:
 
         except Exception as e:
             self.iface.messageBar().pushMessage(
-                "Farb-Fehler",
-                f"Farbe für Feldgrenzen konnte nicht gesetzt werden: {e}",
+                _tr("Farb-Fehler"),
+                _tr("Farbe für Feldgrenzen konnte nicht gesetzt werden: {e}").format(e=e),
                 level=Qgis.Warning,
                 duration=4
             )
+
+    # ------------------- Mehrsprachigkeit -------------------
+    def _apply_language_to_layer(self, node, layer: QgsVectorLayer):
+        """
+        Benennt den Layer passend zur aktuell gewählten Sprache um (echte
+        Umbenennung - QGIS kennt fuer geladene Layer keinen rein kosmetischen
+        Anzeigenamen unabhängig von layer.name()) und setzt die Feld-Aliase
+        in der Attributtabelle. Alle internen Suchen nach Layern (siehe
+        _find_child_layer) laufen über translations.canonical_layer_name()
+        und finden den Layer daher unabhängig von der aktuellen Sprache.
+        layer.source() (GPKG-Pfad/Tabellenname), Felder.csv und die .qml-
+        Stylenamen bleiben unberührt, da sie nicht an layer.name() hängen.
+        """
+        lang = translations.get_language()
+        try:
+            target_name = translations.display_layer_name(layer.name(), lang)
+            if layer.name() != target_name:
+                layer.setName(target_name)
+        except Exception:
+            pass
+        try:
+            alias_map = translations.FIELD_ALIASES.get(lang, {})
+            for idx, f in enumerate(layer.fields()):
+                layer.setFieldAlias(idx, alias_map.get(f.name(), ""))
+        except Exception:
+            pass
+
+    def _apply_language_to_project(self):
+        """Wendet die aktuelle Sprache (Layer-Namen + Feld-Aliase) auf alle geladenen Layer an."""
+        root = QgsProject.instance().layerTreeRoot()
+        for node in root.findLayers():
+            lyr = node.layer()
+            if isinstance(lyr, QgsVectorLayer):
+                self._apply_language_to_layer(node, lyr)
+
+    def _on_language_changed(self, code):
+        self._apply_language_to_project()
+
+    def _dedupe_felder_layers(self):
+        """
+        Sicherheitsnetz: Entfernt je Betrieb überzählige Felder-Katalog-Layer
+        (Kanon-Name "Felder", unabhängig von der aktuell angezeigten Sprache).
+        Es handelt sich um reine Read-only-Ansichten derselben Felder.csv,
+        es geht also keine Dateninformation verloren.
+        """
+        root = QgsProject.instance().layerTreeRoot()
+        to_remove = []
+        for ctr in root.children():
+            if not isinstance(ctr, QgsLayerTreeGroup):
+                continue
+            for frm in ctr.children():
+                if not isinstance(frm, QgsLayerTreeGroup):
+                    continue
+                felder_layers = []
+                for ch in frm.children():
+                    try:
+                        lyr = ch.layer()
+                    except Exception:
+                        lyr = None
+                    if isinstance(lyr, QgsVectorLayer) and translations.canonical_layer_name(lyr.name()) == FELDER_LAYER_NAME:
+                        felder_layers.append(lyr)
+                for extra in felder_layers[1:]:
+                    to_remove.append(extra.id())
+        if to_remove:
+            QgsProject.instance().removeMapLayers(to_remove)
+
     def _reorder_frm_group_layers(self, frm_group: QgsLayerTreeGroup):
         """
         Sortiert die Layer innerhalb einer Betriebsgruppe in die gewünschte Reihenfolge
@@ -1061,7 +1194,7 @@ class LkTechnikPathPlanner:
             except Exception:
                 lyr = None
             if isinstance(lyr, QgsVectorLayer):
-                layer_nodes.append((lyr.name(), ch))
+                layer_nodes.append((translations.canonical_layer_name(lyr.name()), ch))
 
         name_to_node = {name: node for name, node in layer_nodes}
 
@@ -1095,9 +1228,19 @@ class LkTechnikPathPlanner:
             QgsProject.instance().layersAdded.connect(self._on_layers_added)
         except Exception:
             pass
-        # bereits geladene Layer (Plugin nach Projektöffnung aktiviert)
+        try:
+            QgsProject.instance().readProject.connect(self._on_project_read)
+        except Exception:
+            pass
+        # bereits geladenes Projekt (Plugin nach Projektöffnung aktiviert):
+        # Feldgrenzen-Signal verdrahten und Feld-Dropdowns sofort einrichten,
+        # ohne dass der Path Planner dafür erst geöffnet werden muss.
         try:
             self._on_layers_added(list(QgsProject.instance().mapLayers().values()))
+        except Exception:
+            pass
+        try:
+            self._sync_project_state()
         except Exception:
             pass
 
@@ -1109,13 +1252,31 @@ class LkTechnikPathPlanner:
             QgsProject.instance().layersAdded.disconnect(self._on_layers_added)
         except Exception:
             pass
+        try:
+            QgsProject.instance().readProject.disconnect(self._on_project_read)
+        except Exception:
+            pass
+
+    def _on_project_read(self, *args):
+        """Wird nach jedem vollständigen Laden eines Projekts ausgelöst."""
+        try:
+            self._sync_project_state()
+        except Exception:
+            pass
 
     # ------------------- Felder.csv-Automatik -------------------
     def _on_layers_added(self, layers):
         for lyr in layers:
             try:
-                if isinstance(lyr, QgsVectorLayer) and lyr.name() == "Feldgrenzen":
+                if isinstance(lyr, QgsVectorLayer) and translations.canonical_layer_name(lyr.name()) == "Feldgrenzen":
                     self._wire_feldgrenzen_layer(lyr)
+            except Exception:
+                pass
+            try:
+                if isinstance(lyr, QgsVectorLayer):
+                    node = QgsProject.instance().layerTreeRoot().findLayer(lyr.id())
+                    if node is not None:
+                        self._apply_language_to_layer(node, lyr)
             except Exception:
                 pass
 
@@ -1366,7 +1527,7 @@ class LkTechnikPathPlanner:
         # Pfad) – ohne ID-Abhängigkeit.
         config = {
             "Layer": "",
-            "LayerName": FELDER_LAYER_NAME,
+            "LayerName": felder.name(),
             "LayerSource": felder.publicSource(),
             "LayerProviderName": felder.providerType(),
             "Key": "id",
@@ -1532,13 +1693,36 @@ class LkTechnikPathPlanner:
             self.dlg.btn_add_frm.clicked.connect(self._ui_add_farm)
             self.dlg.btn_add_field.clicked.connect(self._ui_add_field)
             self.dlg.tree.customContextMenuRequested.connect(self._on_tree_context_menu)
+            self.dlg.languageChanged.connect(self._on_language_changed)
 
-        # Felder.csv beim Öffnen mit den Feldgrenzen abgleichen.
-        # Dadurch landen neu gezeichnete Felder zuverlässig im Katalog,
-        # auch wenn das Commit-Signal nicht gegriffen hat.
+        self._sync_project_state()
+        self.dlg.refresh_tree()
+
+        self.dlg.show()
+        self.dlg.exec_()
+
+    def _sync_project_state(self):
+        """
+        Voller Layer-Abgleich: Duplikate bereinigen, Felder.csv mit den
+        Feldgrenzen abgleichen, Style/Sprache/Farbe je Layer anwenden und
+        die ID-Felder als Feld-Dropdown (Value Relation) konfigurieren.
+
+        Läuft nicht nur beim Öffnen des Path Planner-Dialogs (run()),
+        sondern auch automatisch beim Öffnen eines Projekts (siehe
+        _on_project_read in initGui) – sonst fehlt das Feld-Dropdown, wenn
+        direkt nach dem Projektöffnen (ohne den Path Planner vorher zu
+        öffnen) eine Feldgrenze angelegt wird.
+        """
+        # Sicherheitsnetz ZUERST: durch die fehlerhafte Vorversion entstandene
+        # doppelte Felder-Katalog-Layer bereinigen, bevor irgendetwas anhand
+        # von layer.name() gesucht wird.
+        self._dedupe_felder_layers()
+
+        # Felder.csv mit den Feldgrenzen abgleichen. Dadurch landen neu
+        # gezeichnete Felder zuverlässig im Katalog, auch wenn das
+        # Commit-Signal nicht gegriffen hat.
         self._sync_all_felder_catalogs()
 
-        self.dlg.refresh_tree()
         root = QgsProject.instance().layerTreeRoot()
         for node in root.findLayers():
             lyr = node.layer()
@@ -1546,8 +1730,9 @@ class LkTechnikPathPlanner:
                 continue
 
             self._apply_predefined_style(lyr)
+            self._apply_language_to_layer(node, lyr)
 
-            if lyr.name() == "Feldgrenzen":
+            if translations.canonical_layer_name(lyr.name()) == "Feldgrenzen":
                 parent = node.parent()
                 if isinstance(parent, QgsLayerTreeGroup):
                     self._apply_feldgrenzen_color(lyr, parent)
@@ -1556,9 +1741,6 @@ class LkTechnikPathPlanner:
         # Muss NACH der Style-Anwendung erfolgen, sonst überschreibt der Style
         # das Editor-Widget wieder.
         self._apply_field_dropdowns()
-
-        self.dlg.show()
-        self.dlg.exec_()
 
     def _on_run(self):
         if self.dlg.mode_export.isChecked():
@@ -1584,7 +1766,7 @@ class LkTechnikPathPlanner:
         if base and os.path.isdir(base):
             return base
 
-        dn = QFileDialog.getExistingDirectory(self.iface.mainWindow(), "Ablageordner für neue Betriebe wählen")
+        dn = QFileDialog.getExistingDirectory(self.iface.mainWindow(), _tr("Ablageordner für neue Betriebe wählen"))
         return dn or ""
 
     def _ensure_frm_layers_on_disk(self, ctr_name: str, frm_name: str, frm_group: QgsLayerTreeGroup, target_crs=None):
@@ -1601,7 +1783,7 @@ class LkTechnikPathPlanner:
         base_dir = self._get_project_base_dir()
         if not base_dir:
             self.iface.messageBar().pushMessage(
-                "Abgebrochen", "Kein Ablageordner gewählt – Betrieb wurde nicht erstellt.",
+                _tr("Abgebrochen"), _tr("Kein Ablageordner gewählt – Betrieb wurde nicht erstellt."),
                 level=Qgis.Info, duration=4
             )
             return
@@ -1617,7 +1799,7 @@ class LkTechnikPathPlanner:
             except Exception:
                 lyr = None
             if isinstance(lyr, QgsVectorLayer):
-                existing_names.add(lyr.name())
+                existing_names.add(translations.canonical_layer_name(lyr.name()))
 
         def _write_empty_layer_to_gpkg(layer: QgsVectorLayer, gpkg_path: str, layername: str) -> QgsVectorLayer:
             opts = QgsVectorFileWriter.SaveVectorOptions()
@@ -1722,7 +1904,7 @@ class LkTechnikPathPlanner:
         self._reorder_frm_group_layers(frm_group)
 
     def _ui_add_customer(self):
-        name, ok = QInputDialog.getText(self.iface.mainWindow(), "Kunde hinzufügen", "Kundenname:")
+        name, ok = QInputDialog.getText(self.iface.mainWindow(), _tr("Kunde hinzufügen"), _tr("Kundenname:"))
         if not ok:
             return
         name = _norm_name(name)
@@ -1733,7 +1915,8 @@ class LkTechnikPathPlanner:
         _ = self._find_or_create_group(root, name)
 
         self.dlg.refresh_tree()
-        self.iface.messageBar().pushMessage("OK", f"Kunde '{name}' angelegt.", level=Qgis.Success, duration=3)
+        self.iface.messageBar().pushMessage(
+            _tr("OK"), _tr("Kunde '{name}' angelegt.").format(name=name), level=Qgis.Success, duration=3)
 
     def _ui_add_farm(self):
         project = QgsProject.instance()
@@ -1744,8 +1927,8 @@ class LkTechnikPathPlanner:
         if not customers:
             QMessageBox.information(
                 self.iface.mainWindow(),
-                "Hinweis",
-                "Es gibt noch keinen Kunden. Bitte zuerst einen Kunden anlegen."
+                _tr("Hinweis"),
+                _tr("Es gibt noch keinen Kunden. Bitte zuerst einen Kunden anlegen.")
             )
             return
 
@@ -1773,19 +1956,21 @@ class LkTechnikPathPlanner:
             )
         except Exception as e:
             self.iface.messageBar().pushMessage(
-                "Fehler",
-                f"Konnte Betrieb/Layers nicht erstellen: {e}",
+                _tr("Fehler"),
+                _tr("Konnte Betrieb/Layers nicht erstellen: {e}").format(e=e),
                 level=Qgis.Critical,
                 duration=6
             )
             return
 
         self.dlg.refresh_tree()
+        self._apply_language_to_project()
         self._apply_field_dropdowns()
 
         self.iface.messageBar().pushMessage(
-            "OK",
-            f"Betrieb '{frm_name}' mit Layern erstellt ({target_crs.authid()}).",
+            _tr("OK"),
+            _tr("Betrieb '{frm_name}' mit Layern erstellt ({crs}).").format(
+                frm_name=frm_name, crs=target_crs.authid()),
             level=Qgis.Success,
             duration=4
         )
@@ -1812,8 +1997,8 @@ class LkTechnikPathPlanner:
         if not pairs:
             QMessageBox.information(
                 self.iface.mainWindow(),
-                "Hinweis",
-                "Es gibt noch keinen Betrieb. Bitte zuerst einen Betrieb anlegen."
+                _tr("Hinweis"),
+                _tr("Es gibt noch keinen Betrieb. Bitte zuerst einen Betrieb anlegen.")
             )
             return
 
@@ -1842,9 +2027,9 @@ class LkTechnikPathPlanner:
         if not csv_path:
             QMessageBox.warning(
                 self.iface.mainWindow(),
-                "Nicht möglich",
-                "Die Layer dieses Betriebs sind noch temporär (nicht gespeichert).\n"
-                "Bitte zuerst dauerhaft als GeoPackage speichern, dann erneut versuchen."
+                _tr("Nicht möglich"),
+                _tr("Die Layer dieses Betriebs sind noch temporär (nicht gespeichert).\n"
+                    "Bitte zuerst dauerhaft als GeoPackage speichern, dann erneut versuchen.")
             )
             return
 
@@ -1878,11 +2063,13 @@ class LkTechnikPathPlanner:
             or _find_child_layer(frm_group, "Punkthindernis") or _find_child_layer(frm_group, "Flaechenhindernis")
         if ref_layer is not None:
             self._reload_felder_for_feldgrenzen(ref_layer, csv_path)
+            self._apply_language_to_project()
 
         self.dlg.refresh_tree()
         self.iface.messageBar().pushMessage(
-            "OK",
-            f"Feld '{name}' angelegt (ID {new_id}). Weise diese ID den Fahrspuren zu.",
+            _tr("OK"),
+            _tr("Feld '{name}' angelegt (ID {new_id}). Weise diese ID den Fahrspuren zu.").format(
+                name=name, new_id=new_id),
             level=Qgis.Success,
             duration=7
         )
@@ -1902,22 +2089,22 @@ class LkTechnikPathPlanner:
         ctr_name = parent.parent().text(0)
 
         menu = QMenu()
-        act_rename = menu.addAction("Feld umbenennen…")
-        act_delete = menu.addAction("Feld löschen…")
+        act_rename = menu.addAction(_tr("Feld umbenennen…"))
+        act_delete = menu.addAction(_tr("Feld löschen…"))
         chosen = menu.exec_(tree.viewport().mapToGlobal(pos))
         if chosen == act_rename:
             try:
                 self._rename_field(ctr_name, frm_name, int(fid), item.text(0))
             except Exception as e:
                 self.iface.messageBar().pushMessage(
-                    "Fehler", f"Umbenennen fehlgeschlagen: {e}", level=Qgis.Critical, duration=6
+                    _tr("Fehler"), _tr("Umbenennen fehlgeschlagen: {e}").format(e=e), level=Qgis.Critical, duration=6
                 )
         elif chosen == act_delete:
             try:
                 self._delete_field(ctr_name, frm_name, int(fid), item.text(0))
             except Exception as e:
                 self.iface.messageBar().pushMessage(
-                    "Fehler", f"Löschen fehlgeschlagen: {e}", level=Qgis.Critical, duration=6
+                    _tr("Fehler"), _tr("Löschen fehlgeschlagen: {e}").format(e=e), level=Qgis.Critical, duration=6
                 )
 
     def _delete_field(self, ctr_name: str, frm_name: str, field_id: int, current_name: str):
@@ -1952,8 +2139,8 @@ class LkTechnikPathPlanner:
         if not csv_path:
             QMessageBox.warning(
                 self.iface.mainWindow(),
-                "Nicht möglich",
-                "Die Layer dieses Betriebs sind noch temporär (nicht gespeichert)."
+                _tr("Nicht möglich"),
+                _tr("Die Layer dieses Betriebs sind noch temporär (nicht gespeichert).")
             )
             return
 
@@ -1964,9 +2151,9 @@ class LkTechnikPathPlanner:
         if editing:
             QMessageBox.warning(
                 self.iface.mainWindow(),
-                "Bearbeitung aktiv",
-                "Bitte zuerst den Bearbeitungsmodus schließen für: "
-                + ", ".join(editing) + "."
+                _tr("Bearbeitung aktiv"),
+                _tr("Bitte zuerst den Bearbeitungsmodus schließen für: {names}.").format(
+                    names=", ".join(_display_layer_name(nm) for nm in editing))
             )
             return
 
@@ -1994,24 +2181,27 @@ class LkTechnikPathPlanner:
                 counts[nm] = len(fids)
                 fids_by_layer[nm] = fids
 
-        label = current_name or f"Feld {field_id}"
-        detail = "\n".join(f"  • {nm}: {counts[nm]} Objekt(e)" for nm in layer_names if nm in counts)
+        label = current_name or _tr("Feld {field_id}").format(field_id=field_id)
+        detail = "\n".join(
+            _tr("  • {name}: {count} Objekt(e)").format(name=_display_layer_name(nm), count=counts[nm])
+            for nm in layer_names if nm in counts)
         if not detail:
-            detail = "  • (keine Geometrien – nur Katalogeintrag)"
+            detail = _tr("  • (keine Geometrien – nur Katalogeintrag)")
 
         msg = QMessageBox(self.iface.mainWindow())
         msg.setIcon(QMessageBox.Warning)
-        msg.setWindowTitle("Feld löschen")
-        msg.setText(f"Sind Sie sicher, dass Sie das Feld „{label}“ (ID {field_id}) löschen möchten?")
+        msg.setWindowTitle(_tr("Feld löschen"))
+        msg.setText(_tr("Sind Sie sicher, dass Sie das Feld „{label}“ (ID {field_id}) löschen möchten?").format(
+            label=label, field_id=field_id))
         msg.setInformativeText(
-            "Damit werden ALLE Daten dieses Feldes unwiderruflich gelöscht – "
-            "Feldgrenze(n), Fahrspuren, Hindernisse und der Katalogeintrag:\n\n"
+            _tr("Damit werden ALLE Daten dieses Feldes unwiderruflich gelöscht – "
+                "Feldgrenze(n), Fahrspuren, Hindernisse und der Katalogeintrag:\n\n")
             + detail
         )
         msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         msg.setDefaultButton(QMessageBox.No)
-        msg.button(QMessageBox.Yes).setText("Ja, löschen")
-        msg.button(QMessageBox.No).setText("Abbrechen")
+        msg.button(QMessageBox.Yes).setText(_tr("Ja, löschen"))
+        msg.button(QMessageBox.No).setText(_tr("Abbrechen"))
         if msg.exec_() != QMessageBox.Yes:
             return
 
@@ -2045,10 +2235,12 @@ class LkTechnikPathPlanner:
                 break
         if ref_layer is not None:
             self._reload_felder_for_feldgrenzen(ref_layer, csv_path)
+            self._apply_language_to_project()
 
         self.dlg.refresh_tree()
         self.iface.messageBar().pushMessage(
-            "OK", f"Feld „{label}“ (ID {field_id}) wurde gelöscht.", level=Qgis.Success, duration=5
+            _tr("OK"), _tr("Feld „{label}“ (ID {field_id}) wurde gelöscht.").format(
+                label=label, field_id=field_id), level=Qgis.Success, duration=5
         )
 
     def _rename_field(self, ctr_name: str, frm_name: str, field_id: int, current_name: str):
@@ -2059,8 +2251,8 @@ class LkTechnikPathPlanner:
         """
         new_name, ok = QInputDialog.getText(
             self.iface.mainWindow(),
-            "Feld umbenennen",
-            f"Neuer Name für Feld (ID {field_id}):",
+            _tr("Feld umbenennen"),
+            _tr("Neuer Name für Feld (ID {field_id}):").format(field_id=field_id),
             text=current_name or ""
         )
         if not ok:
@@ -2093,8 +2285,8 @@ class LkTechnikPathPlanner:
         if not csv_path:
             QMessageBox.warning(
                 self.iface.mainWindow(),
-                "Nicht möglich",
-                "Die Layer dieses Betriebs sind noch temporär (nicht gespeichert)."
+                _tr("Nicht möglich"),
+                _tr("Die Layer dieses Betriebs sind noch temporär (nicht gespeichert).")
             )
             return
 
@@ -2111,10 +2303,12 @@ class LkTechnikPathPlanner:
             or _find_child_layer(frm_group, "Punkthindernis") or _find_child_layer(frm_group, "Flaechenhindernis")
         if ref_layer is not None:
             self._reload_felder_for_feldgrenzen(ref_layer, csv_path)
+            self._apply_language_to_project()
 
         self.dlg.refresh_tree()
         self.iface.messageBar().pushMessage(
-            "OK", f"Feld (ID {field_id}) umbenannt in '{new_name}'.", level=Qgis.Success, duration=5
+            _tr("OK"), _tr("Feld (ID {field_id}) umbenannt in '{new_name}'.").format(
+                field_id=field_id, new_name=new_name), level=Qgis.Success, duration=5
         )
 
     # ------------------------- IMPORT -------------------------
@@ -2124,8 +2318,8 @@ class LkTechnikPathPlanner:
 
         if not path:
             self.iface.messageBar().pushMessage(
-                "Fehler",
-                "Keine Datei oder kein Ordner gewählt.",
+                _tr("Fehler"),
+                _tr("Keine Datei oder kein Ordner gewählt."),
                 level=Qgis.Warning,
                 duration=4
             )
@@ -2142,6 +2336,7 @@ class LkTechnikPathPlanner:
             if detect_aggps_data_root(path):
                 ok = import_aggps(self, path, out_dir)
                 if ok:
+                    self._apply_language_to_project()
                     self.dlg.accept()
                 return
 
@@ -2149,6 +2344,7 @@ class LkTechnikPathPlanner:
             if os.path.exists(gen4_master):
                 ok = import_john_deere_gen4(self, path, out_dir)
                 if ok:
+                    self._apply_language_to_project()
                     self.dlg.accept()
                 return
 
@@ -2157,8 +2353,8 @@ class LkTechnikPathPlanner:
                 path = isoxml_taskdata
             else:
                 self.iface.messageBar().pushMessage(
-                    "Fehler",
-                    "Im gewählten Ordner wurde weder eine MasterData.xml noch eine TASKDATA.XML gefunden.",
+                    _tr("Fehler"),
+                    _tr("Im gewählten Ordner wurde weder eine MasterData.xml noch eine TASKDATA.XML gefunden."),
                     level=Qgis.Warning,
                     duration=5
                 )
@@ -2170,17 +2366,19 @@ class LkTechnikPathPlanner:
                 gen4_dir = os.path.dirname(path)
                 ok = import_john_deere_gen4(self, gen4_dir, out_dir)
                 if ok:
+                    self._apply_language_to_project()
                     self.dlg.accept()
                 return
 
         if not path:
-            self.iface.messageBar().pushMessage("Fehler", "Keine ISOXML-Datei gewählt.", level=Qgis.Warning, duration=4)
+            self.iface.messageBar().pushMessage(_tr("Fehler"), _tr("Keine ISOXML-Datei gewählt."), level=Qgis.Warning, duration=4)
             return
         try:
             tree = ET.parse(path)
             root = tree.getroot()
         except Exception as e:
-            self.iface.messageBar().pushMessage("Fehler", f"XML-Parsing fehlgeschlagen: {e}", level=Qgis.Critical, duration=6)
+            self.iface.messageBar().pushMessage(
+                _tr("Fehler"), _tr("XML-Parsing fehlgeschlagen: {e}").format(e=e), level=Qgis.Critical, duration=6)
             return
         is_v3 = (root.get("VersionMajor", "4") == "3")
 
@@ -2617,9 +2815,11 @@ class LkTechnikPathPlanner:
         # Feld-Dropdown (Value Relation) direkt nach dem Import setzen,
         # damit die Attributtabelle sofort den Feldnamen/Dropdown zeigt und
         # nicht erst beim nächsten Öffnen des Path Planners.
+        self._apply_language_to_project()
         self._apply_field_dropdowns()
 
-        self.iface.messageBar().pushMessage("Success", "ISOXML importiert (CTR → FRM → Layer).", level=Qgis.Success, duration=4)
+        self.iface.messageBar().pushMessage(
+            "Success", _tr("ISOXML importiert (CTR → FRM → Layer)."), level=Qgis.Success, duration=4)
         self.dlg.accept()
 
     # ------------------------- EXPORT -------------------------
@@ -2660,11 +2860,11 @@ class LkTechnikPathPlanner:
                         if not isinstance(lyr, QgsVectorLayer):
                             continue
 
-                        if lyr.name() not in required_names:
+                        if translations.canonical_layer_name(lyr.name()) not in required_names:
                             continue
 
                         if lyr.providerType() == "memory":
-                            problems.append(f"{ctr_name} / {frm_name} / {lyr.name()}")
+                            problems.append(f"{ctr_name} / {frm_name} / {_display_layer_name(lyr.name())}")
 
             return problems
 
@@ -2672,13 +2872,13 @@ class LkTechnikPathPlanner:
         if memory_problems:
             preview = "\n".join(memory_problems[:8])
             if len(memory_problems) > 8:
-                preview += f"\n… und {len(memory_problems) - 8} weitere"
+                preview += _tr("\n… und {n} weitere").format(n=len(memory_problems) - 8)
 
             self.iface.messageBar().pushMessage(
-                "Export nicht möglich",
-                "Folgende exportrelevante Layer sind noch temporär:\n"
-                f"{preview}\n\n"
-                "Bitte diese Layer zuerst dauerhaft speichern.",
+                _tr("Export nicht möglich"),
+                _tr("Folgende exportrelevante Layer sind noch temporär:\n"
+                    "{preview}\n\n"
+                    "Bitte diese Layer zuerst dauerhaft speichern.").format(preview=preview),
                 level=Qgis.Warning,
                 duration=10
             )
@@ -2691,7 +2891,7 @@ class LkTechnikPathPlanner:
         term_brand, term_model, term_fmt = self.dlg.selected_terminal()
         if term_fmt is None:
             self.iface.messageBar().pushMessage(
-                "Fehler", "Bitte ein Terminal auswählen.", level=Qgis.Warning, duration=4
+                _tr("Fehler"), _tr("Bitte ein Terminal auswählen."), level=Qgis.Warning, duration=4
             )
             return
         is_aggps = (term_fmt == "AgGPS")
@@ -2706,7 +2906,7 @@ class LkTechnikPathPlanner:
 
         if not out_dir:
             self.iface.messageBar().pushMessage(
-                "Fehler", "Bitte Zielordner wählen.",
+                _tr("Fehler"), _tr("Bitte Zielordner wählen."),
                 level=Qgis.Warning, duration=4
             )
             return
@@ -2714,7 +2914,7 @@ class LkTechnikPathPlanner:
         selected = self.dlg.selected_export_map()
         if not selected:
             self.iface.messageBar().pushMessage(
-                "Hinweis", "Keine Auswahl getroffen.",
+                _tr("Hinweis"), _tr("Keine Auswahl getroffen."),
                 level=Qgis.Info, duration=4
             )
             return
@@ -2724,23 +2924,24 @@ class LkTechnikPathPlanner:
                 ok = export_aggps(self, out_dir, selected)
                 if ok:
                     self.iface.messageBar().pushMessage(
-                        "Erfolgreich",
-                        f"AgGPS-Export erstellt: {os.path.join(out_dir, 'AgGPS', 'Data')}",
+                        _tr("Erfolgreich"),
+                        _tr("AgGPS-Export erstellt: {path}").format(
+                            path=os.path.join(out_dir, 'AgGPS', 'Data')),
                         level=Qgis.Success,
                         duration=4
                     )
                     self.dlg.accept()
                 else:
                     self.iface.messageBar().pushMessage(
-                        "Hinweis",
-                        "Für die Auswahl gab es keine exportierbaren Daten.",
+                        _tr("Hinweis"),
+                        _tr("Für die Auswahl gab es keine exportierbaren Daten."),
                         level=Qgis.Info, duration=5
                     )
                 return
             except Exception as e:
                 self.iface.messageBar().pushMessage(
-                    "Fehler",
-                    f"AgGPS-Export fehlgeschlagen: {e}",
+                    _tr("Fehler"),
+                    _tr("AgGPS-Export fehlgeschlagen: {e}").format(e=e),
                     level=Qgis.Critical,
                     duration=6
                 )
@@ -2751,8 +2952,8 @@ class LkTechnikPathPlanner:
                 ok = export_john_deere_gen4(self, out_dir, selected)
                 if ok:
                     self.iface.messageBar().pushMessage(
-                        "Erfolgreich",
-                        f"John Deere Gen4 Export erstellt: {out_dir}",
+                        _tr("Erfolgreich"),
+                        _tr("John Deere Gen4 Export erstellt: {out_dir}").format(out_dir=out_dir),
                         level=Qgis.Success,
                         duration=4
                     )
@@ -2760,8 +2961,8 @@ class LkTechnikPathPlanner:
                 return
             except Exception as e:
                 self.iface.messageBar().pushMessage(
-                    "Fehler",
-                    f"John Deere Gen4 Export fehlgeschlagen: {e}",
+                    _tr("Fehler"),
+                    _tr("John Deere Gen4 Export fehlgeschlagen: {e}").format(e=e),
                     level=Qgis.Critical,
                     duration=6
                 )
@@ -2833,14 +3034,7 @@ class LkTechnikPathPlanner:
                     yield node
 
         def _find_child_layer_by_name(group: QgsLayerTreeGroup, name: str) -> QgsVectorLayer:
-            for node in group.children():
-                try:
-                    lyr = node.layer()
-                except Exception:
-                    lyr = None
-                if isinstance(lyr, QgsVectorLayer) and lyr.name() == name:
-                    return lyr
-            return None
+            return _find_child_layer(group, name)
 
         exported_any = False
 
@@ -3547,11 +3741,17 @@ class LkTechnikPathPlanner:
             with open(output_file_path, "w", encoding="utf-8") as f:
                 f.write(pretty_xml)
         except Exception as e:
-            self.iface.messageBar().pushMessage("Fehler", f"Konnte XML nicht schreiben: {e}", level=Qgis.Critical, duration=6)
+            self.iface.messageBar().pushMessage(
+                _tr("Fehler"), _tr("Konnte XML nicht schreiben: {e}").format(e=e), level=Qgis.Critical, duration=6)
             return
 
         if not exported_any:
-            self.iface.messageBar().pushMessage("Hinweis", "Keine passenden Gruppen/Layer gefunden – leere TASKDATA.XML geschrieben.", level=Qgis.Info, duration=6)
+            self.iface.messageBar().pushMessage(
+                _tr("Hinweis"),
+                _tr("Keine passenden Gruppen/Layer gefunden – leere TASKDATA.XML geschrieben."),
+                level=Qgis.Info, duration=6)
         else:
-            self.iface.messageBar().pushMessage("Erfolgreich", f"TASKDATA.XML geschrieben: {output_file_path}", level=Qgis.Success, duration=4)
+            self.iface.messageBar().pushMessage(
+                _tr("Erfolgreich"), _tr("TASKDATA.XML geschrieben: {path}").format(path=output_file_path),
+                level=Qgis.Success, duration=4)
         self.dlg.accept()
