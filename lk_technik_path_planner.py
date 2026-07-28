@@ -1122,6 +1122,17 @@ class LkTechnikPathPlanner:
                 layer.setFieldAlias(idx, alias_map.get(f.name(), ""))
         except Exception:
             pass
+        try:
+            # ValueMap-Widget (z.B. "befahrbar": 0/1) mit uebersetzten
+            # Beschriftungen neu setzen - die .qml-Styles legen es zunaechst
+            # nur auf Deutsch an.
+            value_maps = translations.FIELD_VALUE_MAPS.get(lang, {})
+            for field_name, value_map in value_maps.items():
+                idx = layer.fields().indexOf(field_name)
+                if idx >= 0:
+                    layer.setEditorWidgetSetup(idx, QgsEditorWidgetSetup("ValueMap", {"map": value_map}))
+        except Exception:
+            pass
 
     def _apply_language_to_project(self):
         """Wendet die aktuelle Sprache (Layer-Namen + Feld-Aliase) auf alle geladenen Layer an."""

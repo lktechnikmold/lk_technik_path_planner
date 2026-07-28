@@ -114,6 +114,19 @@ FIELD_ALIASES = {
     },
 }
 
+# ValueMap-Editor-Widget fuer das Feld "befahrbar" (Punkt-/Flaechenhindernis).
+# Die eigentlichen Werte (0/1) sowie der Feldname bleiben unveraendert, nur
+# die im Dropdown angezeigten Beschriftungen werden je Sprache uebersetzt.
+# Format entspricht QgsEditorWidgetSetup("ValueMap", {"map": [...]}).
+FIELD_VALUE_MAPS = {
+    "de": {
+        "befahrbar": [{"nicht befahrbar": "0"}, {"befahrbar": "1"}],
+    },
+    "en": {
+        "befahrbar": [{"Not passable": "0"}, {"Passable": "1"}],
+    },
+}
+
 TRANSLATIONS = {
     "en": {
         # --- ToolboxDialog: allgemein ---
