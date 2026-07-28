@@ -2982,7 +2982,7 @@ class LkTechnikPathPlanner:
             # v4.3-Schema erlaubt 0-3; wir schreiben ebenfalls "3" fuer volle 4.3-Konformitaet.
             "VersionMinor": "3",
             "ManagementSoftwareManufacturer": "LK-Technik Mold",
-            "ManagementSoftwareVersion": "2.0.0",
+            "ManagementSoftwareVersion": "2.1.0",
             "DataTransferOrigin": "1"
         })
 
