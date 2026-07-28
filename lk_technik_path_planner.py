@@ -1032,27 +1032,35 @@ class LkTechnikPathPlanner:
 
     def _color_for_frm_group(self, frm_group: QgsLayerTreeGroup) -> QColor:
         """
-        Vergibt die Farbe anhand der Position des Betriebs innerhalb des Kunden.
-        Dadurch haben Geschwisterbetriebe unterschiedliche Farben.
+        Vergibt die Farbe anhand der Position des Betriebs unter ALLEN Kunden
+        im Projekt (nicht nur innerhalb des eigenen Kunden), damit auch
+        Betriebe unterschiedlicher Kunden unterscheidbare Farben bekommen.
         """
         palette = self._betrieb_palette()
 
         if not isinstance(frm_group, QgsLayerTreeGroup):
             return palette[0]
 
-        ctr_group = frm_group.parent()
-        if not isinstance(ctr_group, QgsLayerTreeGroup):
-            return palette[0]
+        root = QgsProject.instance().layerTreeRoot()
 
-        farm_groups = [
-            ch for ch in ctr_group.children()
-            if isinstance(ch, QgsLayerTreeGroup)
-        ]
+        all_farm_groups = []
+        for ctr in root.children():
+            if not isinstance(ctr, QgsLayerTreeGroup):
+                continue
+            farms = [ch for ch in ctr.children() if isinstance(ch, QgsLayerTreeGroup)]
+            all_farm_groups.extend(farms)
 
-        # stabil sortieren nach Name
-        farm_groups = sorted(farm_groups, key=lambda g: _norm_name(g.name()).lower())
+        # stabil sortieren nach Kunde + Betrieb, damit die Zuordnung
+        # unabhängig von der Reihenfolge im Layerbaum immer gleich bleibt
+        all_farm_groups = sorted(
+            all_farm_groups,
+            key=lambda g: (
+                _norm_name(g.parent().name()).lower() if isinstance(g.parent(), QgsLayerTreeGroup) else "",
+                _norm_name(g.name()).lower(),
+            )
+        )
 
-        for idx, grp in enumerate(farm_groups):
+        for idx, grp in enumerate(all_farm_groups):
             if grp == frm_group:
                 return palette[idx % len(palette)]
 
