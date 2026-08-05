@@ -1,12 +1,21 @@
 # -*- coding: utf-8 -*-
+#
+# Hinweis zu nosec-Markierungen B110/B112: breite except Exception: pass/
+# continue-Bloecke werden hier bewusst verwendet, um robust gegenueber
+# Unterschieden zwischen QGIS-/PyQt-Versionen sowie ungueltigen/fehlenden
+# Attributwerten zu bleiben. Es werden dabei keine sicherheitsrelevanten
+# Pruefungen uebersprungen.
 
 import os
 import math
 import json
 import uuid
 import datetime
-import xml.etree.ElementTree as ET
-import xml.dom.minidom
+# Wird hier nur zum AUFBAUEN/Serialisieren der selbst erzeugten
+# MasterData.xml verwendet (kein Parsen fremder/nicht vertrauenswuerdiger
+# Daten in dieser Datei) - defusedxml bietet dafuer keine Entsprechung
+# (nur eine sichere Parse-Fassade), daher hier bewusst die Standardbibliothek.
+import xml.etree.ElementTree as ET  # nosec
 
 from qgis.core import (
     QgsProject,
@@ -343,7 +352,7 @@ def export_john_deere_gen4(plugin, out_dir, selected):
                 for f in polygon_layer.getFeatures():
                     try:
                         _fid = int(f[_idf]) if _idf else int(f.id())
-                    except Exception:
+                    except Exception:  # nosec B112
                         continue
                     if _fid not in seen:
                         seen[_fid] = str(f[_nmf]) if _nmf else "Feld_%s" % _fid
@@ -363,7 +372,7 @@ def export_john_deere_gen4(plugin, out_dir, selected):
                 for bf in polygon_layer.getFeatures():
                     try:
                         _bid = int(bf[id_field]) if id_field else int(bf.id())
-                    except Exception:
+                    except Exception:  # nosec B112
                         continue
                     boundary_by_id.setdefault(_bid, []).append(bf)
 
@@ -383,7 +392,7 @@ def export_john_deere_gen4(plugin, out_dir, selected):
                         _bn = boundaries[0][name_field]
                         if _bn not in (None, ""):
                             field_name = str(_bn)
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
 
                 # GENAU EIN Feld je Feld-ID
@@ -425,7 +434,7 @@ def export_john_deere_gen4(plugin, out_dir, selected):
                             _bn = bf[name_field]
                             if _bn not in (None, ""):
                                 b_name = str(_bn)
-                        except Exception:
+                        except Exception:  # nosec B110
                             pass
 
                     boundary_defs.append({
@@ -453,7 +462,7 @@ def export_john_deere_gen4(plugin, out_dir, selected):
                     raw_point_id = point_feature[point_id_field]
                     try:
                         point_field_id = int(raw_point_id)
-                    except Exception:
+                    except Exception:  # nosec B112
                         continue
 
                     field_guid_for_flag = field_guid_map.get(point_field_id)
@@ -519,7 +528,7 @@ def export_john_deere_gen4(plugin, out_dir, selected):
                     raw_area_id = area_feature[area_id_field]
                     try:
                         area_field_id = int(raw_area_id)
-                    except Exception:
+                    except Exception:  # nosec B112
                         continue
 
                     field_guid_for_flag = field_guid_map.get(area_field_id)
@@ -576,7 +585,7 @@ def export_john_deere_gen4(plugin, out_dir, selected):
                     raw_track_id = track_feature[line_id_field]
                     try:
                         track_field_id = int(raw_track_id)
-                    except Exception:
+                    except Exception:  # nosec B112
                         continue
 
                     # nur exportierte Felder berücksichtigen
@@ -837,9 +846,11 @@ def export_john_deere_gen4(plugin, out_dir, selected):
     # -------------------------------------------------
     # XML schreiben
     # -------------------------------------------------
-    xml_bytes = ET.tostring(root_xml, encoding="utf-8")
-    dom = xml.dom.minidom.parseString(xml_bytes)
-    pretty_xml = dom.toprettyxml(indent="  ")
+    try:
+        ET.indent(root_xml, space="  ")
+    except AttributeError:
+        pass  # Python < 3.9: kein Pretty-Print, XML bleibt trotzdem gueltig
+    pretty_xml = '<?xml version="1.0" ?>\n' + ET.tostring(root_xml, encoding="unicode")
 
     masterdata_path = os.path.join(gen4_dir, "MasterData.xml")
     with open(masterdata_path, "w", encoding="utf-8") as f:

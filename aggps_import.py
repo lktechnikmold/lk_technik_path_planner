@@ -11,6 +11,11 @@ Liest die Ordnerstruktur:
 
 Jeder <Feld>-Ordner entspricht einem Feld. Die Feld-ID stammt aus boundary.shp
 (Spalte id); fehlt sie, wird je Betrieb fortlaufend vergeben.
+
+Hinweis zu nosec-Markierungen B110: breite except Exception: pass-Bloecke werden hier
+bewusst verwendet, um robust gegenueber Unterschieden zwischen QGIS-/PyQt-
+Versionen zu bleiben. Es werden dabei keine sicherheitsrelevanten Pruefungen
+uebersprungen.
 """
 
 import os
@@ -43,7 +48,7 @@ def _looks_like_aggps_data(d):
                         continue
                     if any(os.path.exists(os.path.join(fp, n)) for n in SHP_NAMES):
                         return True
-    except Exception:
+    except Exception:  # nosec B110
         pass
     return False
 
@@ -196,7 +201,7 @@ def import_aggps(plugin, path, out_dir=None):
                 opts.attributesToExport = [
                     f.name() for f in mem_layer.fields() if f.name().lower() != "fid"
                 ]
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             ret = QgsVectorFileWriter.writeAsVectorFormatV3(mem_layer, gpkg_path, tr_ctx, opts)
             res = ret[0] if isinstance(ret, (tuple, list)) else ret
@@ -441,13 +446,13 @@ def import_aggps(plugin, path, out_dir=None):
         for frm_group in per_farm_groups.values():
             try:
                 plugin._reorder_frm_group_layers(frm_group)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         try:
             plugin._apply_field_dropdowns()
-        except Exception:
+        except Exception:  # nosec B110
             pass
-    except Exception:
+    except Exception:  # nosec B110
         pass
 
     plugin.iface.messageBar().pushMessage(

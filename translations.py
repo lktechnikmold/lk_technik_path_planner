@@ -1,4 +1,10 @@
 # -*- coding: utf-8 -*-
+#
+# Hinweis zu nosec-Markierungen B110: breite except Exception: pass-Bloecke werden
+# hier bewusst verwendet, um robust gegenueber Unterschieden zwischen
+# QGIS-/PyQt-Versionen zu bleiben (z.B. optionale API-Methoden, die je nach
+# QGIS-Version fehlen koennen). Es werden dabei keine sicherheitsrelevanten
+# Pruefungen uebersprungen.
 """
 Mehrsprachigkeit (Deutsch/Englisch) fuer LK-Technik Path Planner.
 
@@ -44,7 +50,7 @@ def set_language(code: str) -> None:
     _current_language["code"] = code
     try:
         QSettings().setValue(SETTINGS_KEY, code)
-    except Exception:
+    except Exception:  # nosec B110
         pass
 
 

@@ -35,11 +35,30 @@ Author: Florian Köck
 Institution: LK-Technik Mold
 Version: 2.1.1
 Date: 2026-07-28
+
+Hinweis zu nosec-Markierungen B110/B112: breite except Exception: pass/
+continue-Bloecke werden hier bewusst verwendet, um robust gegenueber
+Unterschieden zwischen QGIS-/PyQt-Versionen zu bleiben (z.B. optionale
+API-Methoden, die je nach QGIS-Version fehlen koennen). Es werden dabei
+keine sicherheitsrelevanten Pruefungen uebersprungen.
 """
 
 
-import os, os.path, math, csv, xml.etree.ElementTree as ET, xml.dom.minidom
+import os, os.path, math, csv
+# Nur zum Aufbauen/Serialisieren der selbst erzeugten TASKDATA.XML beim Export
+# (kein Parsen fremder/nicht vertrauenswuerdiger Daten hier) - defusedxml
+# bietet dafuer keine Entsprechung (nur eine sichere Parse-Fassade), daher
+# hier bewusst die Standardbibliothek.
+import xml.etree.ElementTree as ET  # nosec
 import processing
+
+# Nur zum Parsen (TASKDATA.XML stammt vom Terminal/Fremdsoftware, also nicht
+# vertrauenswuerdig) - gehaertete Variante statt xml.etree.ElementTree, um
+# XXE-/Entity-Expansion-Angriffe auszuschliessen.
+try:
+    from .defusedxml import ElementTree as _SafeET
+except Exception:
+    from defusedxml import ElementTree as _SafeET
 
 from qgis.PyQt.QtCore import Qt, QVariant, QUrl, QUrlQuery, pyqtSignal
 from qgis.PyQt.QtGui import QIcon, QPixmap, QColor
@@ -102,7 +121,7 @@ def _is_nullish(v):
     try:
         if isinstance(v, float) and math.isnan(v):
             return True
-    except Exception:
+    except Exception:  # nosec B110
         pass
     s = str(v).strip()
     if s == "":
@@ -249,7 +268,7 @@ def _read_felder_csv(csv_path: str) -> dict:
             try:
                 dialect = csv.Sniffer().sniff(sample, delimiters=";,\t")
                 delim = dialect.delimiter
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             reader = csv.reader(fh, delimiter=delim)
             header = next(reader, None)
@@ -264,11 +283,11 @@ def _read_felder_csv(csv_path: str) -> dict:
                 try:
                     raw_id = rec[id_idx] if id_idx < len(rec) else ""
                     fid = int(str(raw_id).strip())
-                except Exception:
+                except Exception:  # nosec B112
                     continue
                 name = rec[name_idx].strip() if name_idx < len(rec) else ""
                 rows[fid] = name
-    except Exception:
+    except Exception:  # nosec B110
         pass
     return rows
 
@@ -374,7 +393,7 @@ def _field_catalog_for_frm(frm_group: QgsLayerTreeGroup) -> list:
         for feat in poly_layer.getFeatures():
             try:
                 fid = int(feat[id_f]) if id_f else int(feat.id())
-            except Exception:
+            except Exception:  # nosec B112
                 continue
             if fid not in catalog or not catalog.get(fid):
                 catalog[fid] = (str(feat[name_f]).strip() if name_f else "") or catalog.get(fid, "")
@@ -1004,7 +1023,7 @@ class LkTechnikPathPlanner:
 
             try:
                 self.iface.layerTreeView().refreshLayerSymbology(layer.id())
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
         except Exception as e:
@@ -1094,7 +1113,7 @@ class LkTechnikPathPlanner:
 
             try:
                 self.iface.layerTreeView().refreshLayerSymbology(layer.id())
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
         except Exception as e:
@@ -1122,13 +1141,13 @@ class LkTechnikPathPlanner:
             target_name = translations.display_layer_name(layer.name(), lang)
             if layer.name() != target_name:
                 layer.setName(target_name)
-        except Exception:
+        except Exception:  # nosec B110
             pass
         try:
             alias_map = translations.FIELD_ALIASES.get(lang, {})
             for idx, f in enumerate(layer.fields()):
                 layer.setFieldAlias(idx, alias_map.get(f.name(), ""))
-        except Exception:
+        except Exception:  # nosec B110
             pass
         try:
             # ValueMap-Widget (z.B. "befahrbar": 0/1) mit uebersetzten
@@ -1139,7 +1158,7 @@ class LkTechnikPathPlanner:
                 idx = layer.fields().indexOf(field_name)
                 if idx >= 0:
                     layer.setEditorWidgetSetup(idx, QgsEditorWidgetSetup("ValueMap", {"map": value_map}))
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
     def _apply_language_to_project(self):
@@ -1245,22 +1264,22 @@ class LkTechnikPathPlanner:
 
         try:
             QgsProject.instance().layersAdded.connect(self._on_layers_added)
-        except Exception:
+        except Exception:  # nosec B110
             pass
         try:
             QgsProject.instance().readProject.connect(self._on_project_read)
-        except Exception:
+        except Exception:  # nosec B110
             pass
         # bereits geladenes Projekt (Plugin nach Projektöffnung aktiviert):
         # Feldgrenzen-Signal verdrahten und Feld-Dropdowns sofort einrichten,
         # ohne dass der Path Planner dafür erst geöffnet werden muss.
         try:
             self._on_layers_added(list(QgsProject.instance().mapLayers().values()))
-        except Exception:
+        except Exception:  # nosec B110
             pass
         try:
             self._sync_project_state()
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
     def unload(self):
@@ -1269,18 +1288,18 @@ class LkTechnikPathPlanner:
             self.iface.removePluginMenu(self.menu, a)
         try:
             QgsProject.instance().layersAdded.disconnect(self._on_layers_added)
-        except Exception:
+        except Exception:  # nosec B110
             pass
         try:
             QgsProject.instance().readProject.disconnect(self._on_project_read)
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
     def _on_project_read(self, *args):
         """Wird nach jedem vollständigen Laden eines Projekts ausgelöst."""
         try:
             self._sync_project_state()
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
     # ------------------- Felder.csv-Automatik -------------------
@@ -1289,14 +1308,14 @@ class LkTechnikPathPlanner:
             try:
                 if isinstance(lyr, QgsVectorLayer) and translations.canonical_layer_name(lyr.name()) == "Feldgrenzen":
                     self._wire_feldgrenzen_layer(lyr)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             try:
                 if isinstance(lyr, QgsVectorLayer):
                     node = QgsProject.instance().layerTreeRoot().findLayer(lyr.id())
                     if node is not None:
                         self._apply_language_to_layer(node, lyr)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
     def _wire_feldgrenzen_layer(self, layer: QgsVectorLayer):
@@ -1313,7 +1332,7 @@ class LkTechnikPathPlanner:
         try:
             layer.committedFeaturesAdded.connect(self._on_feldgrenzen_committed)
             self._wired_feldgrenzen.add(lid)
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
     def _on_feldgrenzen_committed(self, layer_id, added_features):
@@ -1344,7 +1363,7 @@ class LkTechnikPathPlanner:
                 v = feat[id_field] if id_field else None
                 if not _is_nullish(v):
                     max_id = max(max_id, int(v))
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
         attr_changes = {}        # fid -> {attr_index: value}
@@ -1420,7 +1439,7 @@ class LkTechnikPathPlanner:
         try:
             if getattr(self, "dlg", None) is not None:
                 self.dlg.refresh_tree()
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
     def _reload_felder_for_feldgrenzen(self, feldgrenzen_layer: QgsVectorLayer, csv_path: str):
@@ -1436,7 +1455,7 @@ class LkTechnikPathPlanner:
             try:
                 felder_layer.reload()
                 felder_layer.triggerRepaint()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             return
 
@@ -1464,7 +1483,7 @@ class LkTechnikPathPlanner:
                 old.reload()
                 old.updateExtents()
                 old.triggerRepaint()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             return old
         new_layer = _load_felder_layer(csv_path)
@@ -1473,7 +1492,7 @@ class LkTechnikPathPlanner:
             frm_group.insertLayer(0, new_layer)
             try:
                 self._reorder_frm_group_layers(frm_group)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         return new_layer
 
@@ -1493,7 +1512,7 @@ class LkTechnikPathPlanner:
                     continue
                 try:
                     self._sync_felder_for_group(frm_node)
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
     def _apply_field_dropdowns(self):
@@ -1513,7 +1532,7 @@ class LkTechnikPathPlanner:
                     continue
                 try:
                     self._apply_field_dropdown_for_group(frm_node)
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
     def _apply_field_dropdown_for_group(self, frm_group: QgsLayerTreeGroup):
@@ -1571,7 +1590,7 @@ class LkTechnikPathPlanner:
             if idx >= 0:
                 try:
                     lyr.setEditorWidgetSetup(idx, setup)
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
     def _sync_felder_for_group(self, frm_group: QgsLayerTreeGroup):
@@ -1611,7 +1630,7 @@ class LkTechnikPathPlanner:
                 if not _is_nullish(v):
                     try:
                         max_id = max(max_id, int(v))
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
 
         changed = False
@@ -1661,7 +1680,7 @@ class LkTechnikPathPlanner:
                     poly_layer.dataProvider().changeAttributeValues(attr_changes)
                     poly_layer.reload()
                     poly_layer.triggerRepaint()
-                except Exception:
+                except Exception:  # nosec B110
                     pass
                 finally:
                     self._felder_guard = False
@@ -1683,7 +1702,7 @@ class LkTechnikPathPlanner:
                     continue
                 try:
                     fid = int(v)
-                except Exception:
+                except Exception:  # nosec B112
                     continue
                 if fid not in rows:
                     rows[fid] = f"Feld {fid}"
@@ -2068,7 +2087,7 @@ class LkTechnikPathPlanner:
                 if not _is_nullish(v):
                     try:
                         max_id = max(max_id, int(v))
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
 
         new_id = max_id + 1
@@ -2194,7 +2213,7 @@ class LkTechnikPathPlanner:
                 try:
                     if int(v) == int(field_id):
                         fids.append(f.id())
-                except Exception:
+                except Exception:  # nosec B112
                     continue
             if fids:
                 counts[nm] = len(fids)
@@ -2236,7 +2255,7 @@ class LkTechnikPathPlanner:
                     lyr.reload()
                     lyr.updateExtents()
                     lyr.triggerRepaint()
-                except Exception:
+                except Exception:  # nosec B110
                     pass
         finally:
             self._felder_guard = False
@@ -2393,7 +2412,7 @@ class LkTechnikPathPlanner:
             self.iface.messageBar().pushMessage(_tr("Fehler"), _tr("Keine ISOXML-Datei gewählt."), level=Qgis.Warning, duration=4)
             return
         try:
-            tree = ET.parse(path)
+            tree = _SafeET.parse(path)
             root = tree.getroot()
         except Exception as e:
             self.iface.messageBar().pushMessage(
@@ -2515,7 +2534,7 @@ class LkTechnikPathPlanner:
                 opts.driverName = "GPKG"; opts.layerName = key
                 try:
                     opts.attributesToExport = [f.name() for f in mem_layer.fields() if f.name().lower() != 'fid']
-                except Exception:
+                except Exception:  # nosec B110
                     pass
                 _ = QgsVectorFileWriter.writeAsVectorFormatV3(mem_layer, gpkg_path, tr_ctx, opts)
                 uri = f"{gpkg_path}|layername={key}"
@@ -3131,14 +3150,14 @@ class LkTechnikPathPlanner:
                     try:
                         if layer and layer.crs().isValid() and layer.crs().mapUnits() == Qgis.DistanceUnit.Meters:
                             return layer.crs()
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
 
                     try:
                         prj_crs = QgsProject.instance().crs()
                         if prj_crs.isValid() and prj_crs.mapUnits() == Qgis.DistanceUnit.Meters:
                             return prj_crs
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
 
                     return QgsCoordinateReferenceSystem("EPSG:32633")
@@ -3348,7 +3367,7 @@ class LkTechnikPathPlanner:
                         lines = geom.asMultiPolyline()
                         if lines:
                             return lines
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
 
                     # dann versuchen: einzelne Line
@@ -3356,7 +3375,7 @@ class LkTechnikPathPlanner:
                         line = geom.asPolyline()
                         if line:
                             return [line]
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
 
                     return []
@@ -3442,7 +3461,7 @@ class LkTechnikPathPlanner:
                     for _bf in polygon_layer.getFeatures():
                         try:
                             _bid = int(_bf[id_field]) if id_field else int(_bf.id())
-                        except Exception:
+                        except Exception:  # nosec B112
                             continue
                         boundary_by_id.setdefault(_bid, []).append(_bf)
 
@@ -3529,7 +3548,7 @@ class LkTechnikPathPlanner:
                             try:
                                 if int(raw) != int(field_id):
                                     continue
-                            except Exception:
+                            except Exception:  # nosec B112
                                 continue
                             bf_val = fh_feature['befahrbar'] if 'befahrbar' in fh_names else 0
                             # Normgerecht: statt eines Custom-Attributs (P094_Impassable, das es in
@@ -3566,7 +3585,7 @@ class LkTechnikPathPlanner:
                             try:
                                 if int(raw) != int(field_id):
                                     continue
-                            except Exception:
+                            except Exception:  # nosec B112
                                 continue
                             bf_val = hindernis['befahrbar'] if 'befahrbar' in p_names else 1
                             if is_v3:
@@ -3596,7 +3615,7 @@ class LkTechnikPathPlanner:
                                 try:
                                     if int(raw) != int(field_id):
                                         continue
-                                except Exception:
+                                except Exception:  # nosec B112
                                     continue
 
                                 track_name = track_feature['Name'] if 'Name' in line_names else ''
@@ -3633,7 +3652,7 @@ class LkTechnikPathPlanner:
                                     try:
                                         if int(raw) != int(field_id):
                                             continue
-                                    except Exception:
+                                    except Exception:  # nosec B112
                                         continue
                                     if seg_attr is None:
                                         segments.setdefault('Kontur', []).append(track_feature)
@@ -3712,7 +3731,7 @@ class LkTechnikPathPlanner:
                                     try:
                                         if int(track_feature[id_attr]) != int(field_id):
                                             continue
-                                    except Exception:
+                                    except Exception:  # nosec B112
                                         continue
 
                                     # Wenn Kontursegmente NICHT exportiert werden:
@@ -3758,9 +3777,11 @@ class LkTechnikPathPlanner:
                                             })
                     exported_any = True
 
-        xml_bytes = ET.tostring(root_xml, encoding='utf-8')
-        dom = xml.dom.minidom.parseString(xml_bytes)
-        pretty_xml = dom.toprettyxml(indent="  ")
+        try:
+            ET.indent(root_xml, space="  ")
+        except AttributeError:
+            pass  # Python < 3.9: kein Pretty-Print, XML bleibt trotzdem gueltig
+        pretty_xml = '<?xml version="1.0" ?>\n' + ET.tostring(root_xml, encoding="unicode")
         try:
             with open(output_file_path, "w", encoding="utf-8") as f:
                 f.write(pretty_xml)

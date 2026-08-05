@@ -1,8 +1,21 @@
 # -*- coding: utf-8 -*-
+#
+# Hinweis zu nosec-Markierungen B110/B112: breite except Exception: pass/
+# continue-Bloecke werden hier bewusst verwendet, um robust gegenueber
+# Unterschieden zwischen QGIS-/PyQt-Versionen sowie ungueltigen/fehlenden
+# Werten in importierten Fremddateien zu bleiben. Es werden dabei keine
+# sicherheitsrelevanten Pruefungen uebersprungen.
 
 import os
 import json
-import xml.etree.ElementTree as ET
+
+# Nur zum Parsen (MasterData.xml stammt vom Terminal/Fremdsoftware, also
+# nicht vertrauenswuerdig) - gehaertete Variante statt xml.etree.ElementTree,
+# um XXE-/Entity-Expansion-Angriffe auszuschliessen.
+try:
+    from .defusedxml import ElementTree as ET
+except Exception:
+    from defusedxml import ElementTree as ET
 
 from qgis.core import (
     Qgis,
@@ -206,7 +219,7 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
                     f.name() for f in mem_layer.fields()
                     if f.name().lower() != "fid"
                 ]
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
             ret = QgsVectorFileWriter.writeAsVectorFormatV3(
@@ -470,7 +483,7 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
 
         try:
             data = _read_json(gj_path)
-        except Exception:
+        except Exception:  # nosec B112
             continue
 
         features = data.get("features", [])
@@ -524,7 +537,7 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
         try:
             a_pt = _tx_xy(a_el.get("Longitude"), a_el.get("Latitude"))
             b_pt = _tx_xy(b_el.get("Longitude"), b_el.get("Latitude"))
-        except Exception:
+        except Exception:  # nosec B112
             continue
 
         qgs_geom = QgsGeometry.fromPolylineXY([a_pt, b_pt])
@@ -565,7 +578,7 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
 
         try:
             data = _read_json(gj_path)
-        except Exception:
+        except Exception:  # nosec B112
             continue
 
         features = data.get("features", [])
@@ -624,7 +637,7 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
 
         try:
             data = _read_json(gj_path)
-        except Exception:
+        except Exception:  # nosec B112
             continue
 
         # Flag-GJSON ist manchmal direkt Feature, manchmal FeatureCollection
@@ -698,7 +711,7 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
             key = (ctr_name, frm_name)
             try:
                 fid = int(info["field_id"])
-            except Exception:
+            except Exception:  # nosec B112
                 continue
             felder_by_key.setdefault(key, {})[fid] = info.get("name", "")
 
@@ -746,14 +759,14 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
         for frm_group in per_farm_groups.values():
             try:
                 plugin._reorder_frm_group_layers(frm_group)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         # Feld-Dropdown sofort setzen (sonst erst beim nächsten Öffnen sichtbar)
         try:
             plugin._apply_field_dropdowns()
-        except Exception:
+        except Exception:  # nosec B110
             pass
-    except Exception:
+    except Exception:  # nosec B110
         pass
 
     plugin.iface.messageBar().pushMessage(
