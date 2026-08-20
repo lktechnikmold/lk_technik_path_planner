@@ -2439,17 +2439,25 @@ class LkTechnikPathPlanner:
             area_crs = QgsCoordinateReferenceSystem("EPSG:32633")
             area_transform = QgsCoordinateTransform(src_crs, area_crs, QgsProject.instance())
 
-        def _calc_area_from_ring_wgs84(ring_pts_wgs84):
+        def _calc_area_from_rings_wgs84(rings_pts_wgs84):
             """
-            Erwartet Ringpunkte in WGS84 (lon/lat als QgsPointXY).
-            Berechnet Fläche in m² über metrisches CRS.
+            Erwartet eine Liste von Ringen in WGS84 (lon/lat als QgsPointXY);
+            erster Ring = Außenring, weitere = Löcher. Berechnet die Fläche
+            in m² über ein metrisches CRS - Löcher werden dabei automatisch
+            von der Fläche des Außenrings abgezogen.
             """
             try:
-                if len(ring_pts_wgs84) < 3:
+                if not rings_pts_wgs84 or len(rings_pts_wgs84[0]) < 3:
                     return 0.0
 
-                ring_metric = [area_transform.transform(pt) for pt in ring_pts_wgs84]
-                geom_metric = QgsGeometry.fromPolygonXY([ring_metric])
+                rings_metric = [
+                    [area_transform.transform(pt) for pt in ring]
+                    for ring in rings_pts_wgs84
+                    if len(ring) >= 3
+                ]
+                if not rings_metric:
+                    return 0.0
+                geom_metric = QgsGeometry.fromPolygonXY(rings_metric)
                 return float(geom_metric.area())
             except Exception:
                 return 0.0
@@ -2677,61 +2685,104 @@ class LkTechnikPathPlanner:
 
             # Boundary - ALLE PLN mit PolygonType "1" (Partfield Boundary) einlesen.
             # Mehrere PLN A=1 (bzw. mehrere LSG A=1) pro PFD = Multipolygon-Grenze:
-            # je Polygon eine eigene Feldgrenzen-Feature mit derselben Feld-ID.
-            # Das entspricht dem Export (eine PLN je Feldgrenze) -> sauberer Roundtrip.
+            # je Aussenring (LSG A=1) eine eigene Feldgrenzen-Feature mit derselben
+            # Feld-ID. Direkt nachfolgende LSG A=2 (PolygonInterior, ohne das
+            # Legacy-Attribut P094_Impassable - siehe unten) sind Löcher IN dieser
+            # Feldgrenze und werden als weitere Ringe derselben Geometrie
+            # aufgenommen. Das entspricht dem Export (eine PLN je Feldgrenze,
+            # LSG A=1 + je Loch ein LSG A=2) -> sauberer Roundtrip.
             boundary_feats = []
             for pln_b in pfd.findall("PLN[@A='1']"):
-                for lsg_field in pln_b.findall("LSG[@A='1']"):
+                current_rings = []         # [aussenring, loch1, loch2, ...] (Ziel-KBS)
+                current_rings_wgs84 = []   # dieselbe Struktur in WGS84 (für Flächenberechnung)
+
+                def _flush_boundary_ring(rings, rings_wgs84):
+                    if not rings or len(rings[0]) <= 2:
+                        return
+                    # Fläche IMMER aus der Geometrie berechnen (nie aus der Datei).
+                    final_area_val = _calc_area_from_rings_wgs84(rings_wgs84)
+
+                    # Grenzenname aus PLN@B (PolygonDesignator). Ist er leer oder
+                    # nicht vorhanden, heißt die Feldgrenze wie das Feld (PFD@C).
+                    bname = pln_b.get("B")
+                    if _is_nullish(bname) or not str(bname).strip():
+                        bname = pfd_name
+
+                    feat_f = QgsFeature(field_layer.fields())
+                    feat_f.setAttribute("ID", numeric_id)
+                    feat_f.setAttribute("Name", bname)
+                    feat_f.setAttribute("Flaeche", final_area_val)
+                    feat_f.setGeometry(QgsGeometry.fromPolygonXY(rings))
+                    boundary_feats.append(feat_f)
+
+                for lsg_field in pln_b.findall("LSG"):
+                    a_val = lsg_field.get("A")
+                    if a_val not in ("1", "2"):
+                        continue
+
                     ring_pts = []
                     ring_pts_wgs84 = []
-
                     for pnt in lsg_field.findall("PNT"):
-                        a_val = pnt.get("A")
-                        if a_val in ("10", "2"):
+                        pa = pnt.get("A")
+                        if pa in ("10", "2"):
                             lat = float(pnt.get("C", "0"))
                             lon = float(pnt.get("D", "0"))
-
                             ring_pts_wgs84.append(QgsPointXY(lon, lat))
                             ring_pts.append(_tx_pt_xy(lon, lat))
 
-                    if len(ring_pts) > 2:
-                        # Fläche IMMER aus der Geometrie berechnen (nie aus der Datei).
-                        final_area_val = _calc_area_from_ring_wgs84(ring_pts_wgs84)
+                    if a_val == "1":
+                        # neuer Außenring -> vorheriges Polygon (falls vorhanden) abschließen
+                        _flush_boundary_ring(current_rings, current_rings_wgs84)
+                        current_rings = [ring_pts] if len(ring_pts) > 2 else []
+                        current_rings_wgs84 = [ring_pts_wgs84] if len(ring_pts_wgs84) > 2 else []
+                    elif (a_val == "2" and current_rings and len(ring_pts) > 2
+                          and lsg_field.get("P094_Impassable") is None):
+                        # Loch im aktuellen Außenring (Legacy-Hindernis-LSGs mit
+                        # P094_Impassable werden bewusst NICHT als Loch übernommen,
+                        # die behandelt der Legacy-Block weiter unten separat).
+                        current_rings.append(ring_pts)
+                        current_rings_wgs84.append(ring_pts_wgs84)
 
-                        # Grenzenname aus PLN@B (PolygonDesignator). Ist er leer oder
-                        # nicht vorhanden, heißt die Feldgrenze wie das Feld (PFD@C).
-                        bname = pln_b.get("B")
-                        if _is_nullish(bname) or not str(bname).strip():
-                            bname = pfd_name
-
-                        feat_f = QgsFeature(field_layer.fields())
-                        feat_f.setAttribute("ID", numeric_id)
-                        feat_f.setAttribute("Name", bname)
-                        feat_f.setAttribute("Flaeche", final_area_val)
-                        feat_f.setGeometry(QgsGeometry.fromPolygonXY([ring_pts]))
-                        boundary_feats.append(feat_f)
+                _flush_boundary_ring(current_rings, current_rings_wgs84)
 
             if boundary_feats:
                 dp_field.addFeatures(boundary_feats)
 
             # Area obstacles - neues, normgerechtes Format: eigene PLN mit
             # PolygonType "6" (Obstacle, nicht befahrbar) oder "8" (Other, befahrbar).
+            # Ein LSG A=1 (Außenring) mit optional folgenden LSG A=2 (Löcher, z.B.
+            # eine "Insel" innerhalb des Hindernisses) ergibt EIN Hindernis-Feature.
             for hind_pln in pfd.findall("PLN"):
                 hind_type = hind_pln.get("A")
                 if hind_type not in ("6", "8"):
                     continue
                 bf_val = 1 if hind_type == "8" else 0
+                current_rings2 = []
+
+                def _flush_area_ring(rings):
+                    if not rings or len(rings[0]) <= 2:
+                        return
+                    feat_a = QgsFeature(area_layer.fields())
+                    feat_a.setAttribute("ID", numeric_id); feat_a.setAttribute("befahrbar", bf_val)
+                    feat_a.setGeometry(QgsGeometry.fromPolygonXY(rings))
+                    dp_area.addFeatures([feat_a])
+
                 for lsg_hind in hind_pln.findall("LSG"):
+                    a_val2 = lsg_hind.get("A")
+                    if a_val2 not in ("1", "2"):
+                        continue
                     ring2 = []
                     for pnt2 in lsg_hind.findall("PNT"):
                         if pnt2.get("A") in ("10", "2"):
                             lat2 = float(pnt2.get("C", "0")); lon2 = float(pnt2.get("D", "0"))
                             ring2.append(_tx_pt_xy(lon2, lat2))
-                    if len(ring2) > 2:
-                        feat_a = QgsFeature(area_layer.fields())
-                        feat_a.setAttribute("ID", numeric_id); feat_a.setAttribute("befahrbar", bf_val)
-                        feat_a.setGeometry(QgsGeometry.fromPolygonXY([ring2]))
-                        dp_area.addFeatures([feat_a])
+                    if a_val2 == "1":
+                        _flush_area_ring(current_rings2)
+                        current_rings2 = [ring2] if len(ring2) > 2 else []
+                    elif a_val2 == "2" and current_rings2 and len(ring2) > 2:
+                        current_rings2.append(ring2)
+
+                _flush_area_ring(current_rings2)
 
             # Area obstacles - Legacy-Format aus aelteren Exporten (< Fix vom Juli 2026):
             # P094_Impassable war ein nicht-normkonformes Custom-Attribut auf einer LSG,
@@ -3138,7 +3189,32 @@ class LkTechnikPathPlanner:
                         pxy = ct.transform(QgsPointXY(x, y))
                         return pxy.x(), pxy.y()  # lon, lat
                     return x, y
-                
+
+                def _write_polygon_rings(pln_element, geom, ct):
+                    """
+                    Schreibt die Ringe einer (Multi-)Polygon-Geometrie als LSG-Kinder
+                    von pln_element: je Polygonteil ein LSG A=1 (Außenring), gefolgt
+                    von je einem LSG A=2 pro Loch (Innenring) dieses Teils - siehe
+                    ISO 11783-10 PolygonType 1=PolygonExterior / 2=PolygonInterior.
+                    """
+                    polys = geom.asMultiPolygon() or []
+                    if not polys:
+                        single = geom.asPolygon()
+                        if single:
+                            polys = [single]
+                    for polygon in polys:
+                        if not polygon:
+                            continue
+                        lsg_ext = ET.SubElement(pln_element, 'LSG', {'A': '1'})
+                        for pt in polygon[0]:
+                            lon, lat = _to_wgs_xy_from_point(pt, ct)
+                            ET.SubElement(lsg_ext, 'PNT', {'A': '2', 'C': _fmt_coord(lat), 'D': _fmt_coord(lon)})
+                        for hole_ring in polygon[1:]:
+                            lsg_hole = ET.SubElement(pln_element, 'LSG', {'A': '2'})
+                            for pt in hole_ring:
+                                lon, lat = _to_wgs_xy_from_point(pt, ct)
+                                ET.SubElement(lsg_hole, 'PNT', {'A': '2', 'C': _fmt_coord(lat), 'D': _fmt_coord(lon)})
+
                 def _metric_crs_for_layer(layer):
                     """
                     Liefert ein metrisches CRS für die Verdichtung.
@@ -3524,18 +3600,8 @@ class LkTechnikPathPlanner:
                         if pln_element is None:
                             pln_element = this_pln
 
-                        lsg_field = ET.SubElement(this_pln, 'LSG', {'A': '1'})
                         geom = bf.geometry()
-                        polys = geom.asMultiPolygon() or []
-                        if not polys:
-                            single_poly = geom.asPolygon()
-                            if single_poly:
-                                polys = [single_poly]
-                        for polygon in polys:
-                            for ring in polygon:
-                                for pt in ring:
-                                    lon, lat = _to_wgs_xy_from_point(pt, ct_poly)
-                                    ET.SubElement(lsg_field, 'PNT', {'A': '2', 'C': _fmt_coord(lat), 'D': _fmt_coord(lon)})
+                        _write_polygon_rings(this_pln, geom, ct_poly)
 
                     #Area obstacles
                     if fh_layer is not None:
@@ -3561,18 +3627,8 @@ class LkTechnikPathPlanner:
                                 hind_pln_attrs['E'] = f'PLN{pln_global}'
                                 pln_global += 1
                             hind_pln = ET.SubElement(pfd_element, 'PLN', hind_pln_attrs)
-                            lsg_hind = ET.SubElement(hind_pln, 'LSG', {'A': '1'})
                             fh_geom = fh_feature.geometry()
-                            polys2 = fh_geom.asMultiPolygon() or []
-                            if not polys2:
-                                single2 = fh_geom.asPolygon()
-                                if single2:
-                                    polys2 = [single2]
-                            for poly2 in polys2:
-                                for ring2 in poly2:
-                                    for pt2 in ring2:
-                                        lon2, lat2 = _to_wgs_xy_from_point(pt2, ct_area)
-                                        ET.SubElement(lsg_hind, 'PNT', {'A': '2', 'C': _fmt_coord(lat2), 'D': _fmt_coord(lon2)})
+                            _write_polygon_rings(hind_pln, fh_geom, ct_area)
 
                     #Point obstacles
                     if point_layer is not None:
