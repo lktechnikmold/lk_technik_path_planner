@@ -398,7 +398,12 @@ def _field_catalog_for_frm(frm_group: QgsLayerTreeGroup) -> list:
             if fid not in catalog or not catalog.get(fid):
                 catalog[fid] = (str(feat[name_f]).strip() if name_f else "") or catalog.get(fid, "")
 
-    return [(fid, catalog[fid]) for fid in sorted(catalog.keys())]
+    # Alphabetisch nach Name sortieren (Gross-/Kleinschreibung egal); Feld-ID
+    # als Tiebreaker fuer eine stabile Reihenfolge bei gleichem/leerem Namen.
+    return sorted(
+        ((fid, catalog[fid]) for fid in catalog),
+        key=lambda item: (_norm_name(item[1]).lower(), item[0])
+    )
 
 
 class AddFarmDialog(QDialog):
@@ -1572,7 +1577,7 @@ class LkTechnikPathPlanner:
             "Value": "Name",
             "AllowNull": True,
             "AllowMulti": False,
-            "OrderByValue": False,      # nach Anzeigewert (Name) sortieren
+            "OrderByValue": True,       # nach Anzeigewert (Name) sortieren
             "NofColumns": 1,
             "UseCompleter": False,
             "FilterExpression": "",
