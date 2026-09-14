@@ -3035,6 +3035,31 @@ class LkTechnikPathPlanner:
             )
             return
 
+        # Vor dem eigentlichen Export prüfen, ob im Zielordner bereits
+        # Export-Daten desselben Formats liegen, und ggf. nachfragen -
+        # damit nichts unbeabsichtigt überschrieben wird.
+        if is_aggps:
+            existing_path = os.path.join(out_dir, "AgGPS")
+            format_label = "AgGPS"
+        elif is_john_deere:
+            existing_path = os.path.join(out_dir, "Gen4")
+            format_label = "Gen4"
+        else:
+            existing_path = os.path.join(out_dir, "TASKDATA")
+            format_label = "TASKDATA"
+
+        if os.path.exists(existing_path):
+            reply = QMessageBox.question(
+                self.iface.mainWindow(),
+                _tr("Überschreiben?"),
+                _tr("Im Zielordner existiert bereits ein {format}-Export:\n{path}\n\nÜberschreiben?").format(
+                    format=format_label, path=existing_path),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+
         if is_aggps:
             try:
                 ok = export_aggps(self, out_dir, selected)

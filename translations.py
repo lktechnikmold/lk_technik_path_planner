@@ -142,10 +142,8 @@ TRANSLATIONS = {
         "Abbrechen": "Cancel",
         "Feld hinzufügen": "Add field",
         "z.B. Hausacker": "e.g. Home field",
-        "Es wird ein Feld ohne Feldgrenze im Katalog (Felder.csv) angelegt.\n"
-        "Die vergebene ID kannst du anschließend den Fahrspuren zuweisen.":
-            "A field without a boundary will be added to the catalog (Felder.csv).\n"
-            "You can then assign the given ID to the swaths.",
+        "Es wird ein Feld ohne Feldgrenze im Katalog (Felder.csv) angelegt.":
+            "A field without a boundary will be added to the catalog (Felder.csv).",
         "Betrieb:": "Farm:",
         "Feldname:": "Field name:",
         "Kunde auswählen:": "Select customer:",
@@ -272,6 +270,9 @@ TRANSLATIONS = {
         "Bitte ein Terminal auswählen.": "Please select a terminal.",
         "Bitte Zielordner wählen.": "Please select a target folder.",
         "Keine Auswahl getroffen.": "Nothing selected.",
+        "Überschreiben?": "Overwrite?",
+        "Im Zielordner existiert bereits ein {format}-Export:\n{path}\n\nÜberschreiben?":
+            "A {format} export already exists in the target folder:\n{path}\n\nOverwrite?",
         "Erfolgreich": "Success",
         "AgGPS-Export erstellt: {path}": "AgGPS export created: {path}",
         "Für die Auswahl gab es keine exportierbaren Daten.":
