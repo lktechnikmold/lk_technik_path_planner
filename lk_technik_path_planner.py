@@ -418,6 +418,7 @@ class AddFarmDialog(QDialog):
         self.cmb_customer.addItems(customers)
 
         self.edit_farm_name = QLineEdit()
+        self.edit_farm_name.setMaxLength(32)  # Betriebsname darf max. 32 Zeichen haben (wie Felder.csv/ISOXML)
 
         layout.addRow(_tr("Kunde auswählen:"), self.cmb_customer)
         layout.addRow(_tr("Betriebsname:"), self.edit_farm_name)
@@ -479,13 +480,13 @@ class AddFieldDialog(QDialog):
 
         self.edit_name = QLineEdit()
         self.edit_name.setPlaceholderText(_tr("z.B. Hausacker"))
+        self.edit_name.setMaxLength(32)  # Feldname darf max. 32 Zeichen haben (wie Felder.csv/ISOXML)
 
         layout.addRow(_tr("Betrieb:"), self.cmb_farm)
         layout.addRow(_tr("Feldname:"), self.edit_name)
 
         hint = QLabel(_tr(
-            "Es wird ein Feld ohne Feldgrenze im Katalog (Felder.csv) angelegt.\n"
-            "Die vergebene ID kannst du anschließend den Fahrspuren zuweisen."
+            "Es wird ein Feld ohne Feldgrenze im Katalog (Felder.csv) angelegt."
         ))
         hint.setWordWrap(True)
         layout.addRow(hint)
@@ -1947,7 +1948,17 @@ class LkTechnikPathPlanner:
         self._reorder_frm_group_layers(frm_group)
 
     def _ui_add_customer(self):
-        name, ok = QInputDialog.getText(self.iface.mainWindow(), _tr("Kunde hinzufügen"), _tr("Kundenname:"))
+        # QInputDialog-Instanz statt der statischen getText()-Methode, damit
+        # das interne QLineEdit auf 32 Zeichen begrenzt werden kann (wie
+        # Felder.csv/ISOXML).
+        input_dlg = QInputDialog(self.iface.mainWindow())
+        input_dlg.setWindowTitle(_tr("Kunde hinzufügen"))
+        input_dlg.setLabelText(_tr("Kundenname:"))
+        line_edit = input_dlg.findChild(QLineEdit)
+        if line_edit is not None:
+            line_edit.setMaxLength(32)
+        ok = input_dlg.exec_() == QDialog.Accepted
+        name = input_dlg.textValue()
         if not ok:
             return
         name = _norm_name(name)
@@ -2292,12 +2303,18 @@ class LkTechnikPathPlanner:
         das Name-Attribut der zugehörigen Feldgrenze(n) an.
         Funktioniert auch für Felder OHNE Feldgrenze.
         """
-        new_name, ok = QInputDialog.getText(
-            self.iface.mainWindow(),
-            _tr("Feld umbenennen"),
-            _tr("Neuer Name für Feld (ID {field_id}):").format(field_id=field_id),
-            text=current_name or ""
-        )
+        # QInputDialog-Instanz statt der statischen getText()-Methode, damit
+        # das interne QLineEdit auf 32 Zeichen begrenzt werden kann (wie
+        # Felder.csv/ISOXML).
+        input_dlg = QInputDialog(self.iface.mainWindow())
+        input_dlg.setWindowTitle(_tr("Feld umbenennen"))
+        input_dlg.setLabelText(_tr("Neuer Name für Feld (ID {field_id}):").format(field_id=field_id))
+        input_dlg.setTextValue(current_name or "")
+        line_edit = input_dlg.findChild(QLineEdit)
+        if line_edit is not None:
+            line_edit.setMaxLength(32)
+        ok = input_dlg.exec_() == QDialog.Accepted
+        new_name = input_dlg.textValue()
         if not ok:
             return
         new_name = _norm_name(new_name)

@@ -443,13 +443,13 @@
     <constraint unique_strength="1" exp_strength="0" notnull_strength="1" field="fid" constraints="3"/>
     <constraint unique_strength="2" exp_strength="0" notnull_strength="0" field="ID" constraints="2"/>
     <constraint unique_strength="0" exp_strength="0" notnull_strength="0" field="Flaeche" constraints="0"/>
-    <constraint unique_strength="0" exp_strength="0" notnull_strength="0" field="Name" constraints="0"/>
+    <constraint unique_strength="0" exp_strength="1" notnull_strength="0" field="Name" constraints="4"/>
   </constraints>
   <constraintExpressions>
     <constraint exp="" desc="" field="fid"/>
     <constraint exp="" desc="" field="ID"/>
     <constraint exp="" desc="" field="Flaeche"/>
-    <constraint exp="" desc="" field="Name"/>
+    <constraint exp="length( &quot;Name&quot; ) &lt;= 32" desc="Name darf höchstens 32 Zeichen lang sein" field="Name"/>
   </constraintExpressions>
   <expressionfields/>
   <attributeactions>
