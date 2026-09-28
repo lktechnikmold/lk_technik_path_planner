@@ -24,7 +24,11 @@ from qgis.core import (
 from qgis.PyQt.QtCore import QVariant
 
 
-def export_aggps(plugin, out_dir, selected):
+def export_aggps(
+    plugin, out_dir, selected,
+    densify_enabled=False, interval_m=1.0,
+    extend_enabled=False, extend_m=0.0
+):
     """
     Schreibt die AgGPS-Ordnerstruktur. selected = {Kunde: {Betrieb: set(ids)|None}}.
     Gibt True bei Erfolg zurück.
@@ -32,11 +36,13 @@ def export_aggps(plugin, out_dir, selected):
     # Helfer aus dem Hauptmodul (lazy, um Zirkularimport zu vermeiden)
     try:
         from .lk_technik_path_planner import (
-            _field_catalog_for_frm, _field_map, _pick_field, _is_nullish, _safe, _find_child_layer
+            _field_catalog_for_frm, _field_map, _pick_field, _is_nullish, _safe, _find_child_layer,
+            _densify_geometry_for_export, _extend_geometry_for_export
         )
     except Exception:
         from lk_technik_path_planner import (
-            _field_catalog_for_frm, _field_map, _pick_field, _is_nullish, _safe, _find_child_layer
+            _field_catalog_for_frm, _field_map, _pick_field, _is_nullish, _safe, _find_child_layer,
+            _densify_geometry_for_export, _extend_geometry_for_export
         )
 
     project = QgsProject.instance()
@@ -215,9 +221,27 @@ def export_aggps(plugin, out_dir, selected):
                 s_rows = []
                 for f in s_by_id.get(fid, []):
                     raw = f.geometry()
-                    g = _geom_wgs(raw, ct_line, to_multi=True)
+                    is_curve = _is_curve(raw)
+
+                    # Verdichten/Verlängern nur bei Kurven - wie bei ISOXML/Gen4.
+                    # Die beiden Hilfsfunktionen geben die Geometrie bereits in
+                    # WGS84 zurück, daher danach kein erneutes ct_line-Transform.
+                    working = raw
+                    already_wgs = False
+                    if is_curve and densify_enabled:
+                        densified = _densify_geometry_for_export(working, line, interval_m)
+                        if densified is not None and not densified.isEmpty():
+                            working = densified
+                            already_wgs = True
+                    if is_curve and extend_enabled:
+                        extended = _extend_geometry_for_export(working, line, extend_m)
+                        if extended is not None and not extended.isEmpty():
+                            working = extended
+                            already_wgs = True
+
+                    g = _geom_wgs(working, None if already_wgs else ct_line, to_multi=True)
                     if g is not None:
-                        s_rows.append((g, {"id": 1 if _is_curve(raw) else 0,
+                        s_rows.append((g, {"id": 1 if is_curve else 0,
                                            "Name": _name_of(f, s_name)}))
 
                 # AreaFeature.shp (Flaechenhindernis)

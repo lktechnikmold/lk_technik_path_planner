@@ -27,7 +27,11 @@ from qgis.core import (
 )
 
 
-def export_john_deere_gen4(plugin, out_dir, selected):
+def export_john_deere_gen4(
+    plugin, out_dir, selected,
+    densify_enabled=False, interval_m=1.0,
+    extend_enabled=False, extend_m=0.0
+):
     """
     John Deere Gen4 Grundexport:
     - Gen4/
@@ -52,6 +56,18 @@ def export_john_deere_gen4(plugin, out_dir, selected):
         from .lk_technik_path_planner import _find_child_layer as _find_child_layer_by_name
     except Exception:
         from lk_technik_path_planner import _find_child_layer as _find_child_layer_by_name
+
+    # Kurven verdichten/verlängern beim Export - dieselben Hilfsfunktionen
+    # wie beim ISOXML-Export, damit "Kurven nach Intervall verdichten" und
+    # "Kurven an den Enden verlängern" auch beim Gen4-Export wirken.
+    try:
+        from .lk_technik_path_planner import (
+            _geometry_to_lines_xy, _densify_geometry_for_export, _extend_geometry_for_export
+        )
+    except Exception:
+        from lk_technik_path_planner import (
+            _geometry_to_lines_xy, _densify_geometry_for_export, _extend_geometry_for_export
+        )
 
     def _iter_ctr_groups():
         root = QgsProject.instance().layerTreeRoot()
@@ -617,8 +633,33 @@ def export_john_deere_gen4(plugin, out_dir, selected):
                     if len(line) < 2:
                         continue
 
-                    # Alle Punkte in WGS84 umrechnen
-                    line_lonlat = [_pt_to_lonlat(pt, ct_line) for pt in line]
+                    # Verdichten/Verlängern nur bei Kurven (>2 Stützpunkte) -
+                    # genau wie beim ISOXML-Export. _densify_geometry_for_export()
+                    # und _extend_geometry_for_export() geben die Geometrie
+                    # bereits in WGS84 zurück.
+                    has_curve = len(line) > 2
+                    working_geom = geom
+
+                    if densify_enabled and has_curve:
+                        densified_geom = _densify_geometry_for_export(working_geom, line_layer, interval_m)
+                        if densified_geom is not None and not densified_geom.isEmpty():
+                            working_geom = densified_geom
+
+                    if extend_enabled and has_curve:
+                        extended_geom = _extend_geometry_for_export(working_geom, line_layer, extend_m)
+                        if extended_geom is not None and not extended_geom.isEmpty():
+                            working_geom = extended_geom
+
+                    if working_geom is not geom:
+                        # working_geom liegt bereits in WGS84 (siehe oben)
+                        edited_lines = _geometry_to_lines_xy(working_geom)
+                        if len(edited_lines) == 1 and len(edited_lines[0]) >= 2:
+                            line_lonlat = [(pt.x(), pt.y()) for pt in edited_lines[0]]
+                        else:
+                            line_lonlat = [_pt_to_lonlat(pt, ct_line) for pt in line]
+                    else:
+                        # Alle Punkte in WGS84 umrechnen
+                        line_lonlat = [_pt_to_lonlat(pt, ct_line) for pt in line]
 
                     a_lon, a_lat = line_lonlat[0]
                     b_lon, b_lat = line_lonlat[1]
@@ -628,7 +669,7 @@ def export_john_deere_gen4(plugin, out_dir, selected):
                     # -------------------------------------------------
                     # ABLine = genau 2 Punkte
                     # -------------------------------------------------
-                    if len(line) == 2:
+                    if len(line_lonlat) == 2:
                         abline_defs.append({
                             "type": "ABLine",
                             "CreationDate": timestamp,

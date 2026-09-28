@@ -406,6 +406,248 @@ def _field_catalog_for_frm(frm_group: QgsLayerTreeGroup) -> list:
     )
 
 
+def _metric_crs_for_layer(layer):
+    """
+    Liefert ein metrisches CRS für die Verdichtung.
+    Priorität:
+    1) Layer-CRS, wenn metrisch
+    2) Projekt-CRS, wenn metrisch
+    3) fallback: EPSG:32633
+    """
+    try:
+        if layer and layer.crs().isValid() and layer.crs().mapUnits() == Qgis.DistanceUnit.Meters:
+            return layer.crs()
+    except Exception:  # nosec B110
+        pass
+
+    try:
+        prj_crs = QgsProject.instance().crs()
+        if prj_crs.isValid() and prj_crs.mapUnits() == Qgis.DistanceUnit.Meters:
+            return prj_crs
+    except Exception:  # nosec B110
+        pass
+
+    return QgsCoordinateReferenceSystem("EPSG:32633")
+
+
+def _densify_geometry_for_export(geom, source_layer, interval_m):
+    """
+    Verdichtet eine Geometrie NUR auf einer Kopie.
+    Rückgabe in WGS84-Geometrie, damit der restliche Export unverändert bleibt.
+    """
+    if geom is None or geom.isEmpty():
+        return None
+
+    try:
+        geom_copy = QgsGeometry(geom)
+    except Exception:
+        geom_copy = geom.constGet().clone()
+        geom_copy = QgsGeometry(geom_copy)
+
+    metric_crs = _metric_crs_for_layer(source_layer)
+    source_crs = source_layer.crs()
+    wgs84 = QgsCoordinateReferenceSystem("EPSG:4326")
+    project_ctx = QgsProject.instance()
+
+    to_metric = None
+    to_wgs = None
+
+    try:
+        if source_crs.isValid() and source_crs != metric_crs:
+            to_metric = QgsCoordinateTransform(source_crs, metric_crs, project_ctx)
+    except Exception:
+        to_metric = None
+
+    try:
+        if metric_crs.isValid() and metric_crs != wgs84:
+            to_wgs = QgsCoordinateTransform(metric_crs, wgs84, project_ctx)
+    except Exception:
+        to_wgs = None
+
+    if to_metric:
+        try:
+            geom_copy.transform(to_metric)
+        except Exception:
+            return None
+
+    try:
+        geom_copy = geom_copy.densifyByDistance(interval_m)
+    except Exception:
+        return None
+
+    if to_wgs:
+        try:
+            geom_copy.transform(to_wgs)
+        except Exception:
+            return None
+    elif source_crs.isValid() and source_crs != wgs84:
+        try:
+            direct_to_wgs = QgsCoordinateTransform(source_crs, wgs84, project_ctx)
+            geom_copy.transform(direct_to_wgs)
+        except Exception:
+            return None
+
+    return geom_copy
+
+def _extend_line_both_ends(line_pts, extend_m):
+    """
+    Verlängert eine einzelne Linie an Anfang und Ende um extend_m Meter.
+    Erwartet Punkte in einem metrischen CRS.
+    Gibt eine neue Punktliste zurück.
+    """
+    if not line_pts or len(line_pts) < 2 or extend_m <= 0:
+        return line_pts
+
+    new_line = list(line_pts)
+
+    # Anfang verlängern: Richtung aus erstem Segment ableiten
+    p0 = new_line[0]
+    p1 = new_line[1]
+    dx0 = p1.x() - p0.x()
+    dy0 = p1.y() - p0.y()
+    len0 = math.hypot(dx0, dy0)
+
+    if len0 > 0:
+        ux0 = dx0 / len0
+        uy0 = dy0 / len0
+        new_start = QgsPointXY(
+            p0.x() - ux0 * extend_m,
+            p0.y() - uy0 * extend_m
+        )
+        new_line[0] = new_start
+
+    # Ende verlängern: Richtung aus letztem Segment ableiten
+    pn1 = new_line[-2]
+    pn = new_line[-1]
+    dx1 = pn.x() - pn1.x()
+    dy1 = pn.y() - pn1.y()
+    len1 = math.hypot(dx1, dy1)
+
+    if len1 > 0:
+        ux1 = dx1 / len1
+        uy1 = dy1 / len1
+        new_end = QgsPointXY(
+            pn.x() + ux1 * extend_m,
+            pn.y() + uy1 * extend_m
+        )
+        new_line[-1] = new_end
+
+    return new_line
+
+def _extend_geometry_for_export(geom, source_layer, extend_m):
+    """
+    Verlängert Liniengeometrien an Anfang und Ende um extend_m Meter.
+    Arbeitet nur auf einer Kopie und gibt WGS84-Geometrie zurück.
+    """
+    if geom is None or geom.isEmpty() or extend_m <= 0:
+        return None
+
+    lines_src = _geometry_to_lines_xy(geom)
+    if not lines_src:
+        return None
+
+    metric_crs = _metric_crs_for_layer(source_layer)
+    source_crs = source_layer.crs()
+    wgs84 = QgsCoordinateReferenceSystem("EPSG:4326")
+    project_ctx = QgsProject.instance()
+
+    to_metric = None
+    to_wgs = None
+
+    try:
+        if source_crs.isValid() and source_crs != metric_crs:
+            to_metric = QgsCoordinateTransform(source_crs, metric_crs, project_ctx)
+    except Exception:
+        to_metric = None
+
+    try:
+        if metric_crs.isValid() and metric_crs != wgs84:
+            to_wgs = QgsCoordinateTransform(metric_crs, wgs84, project_ctx)
+    except Exception:
+        to_wgs = None
+
+    metric_lines = []
+    for line in lines_src:
+        metric_line = []
+        for pt in line:
+            p = QgsPointXY(pt.x(), pt.y())
+            if to_metric:
+                try:
+                    p = to_metric.transform(p)
+                except Exception:
+                    return None
+            metric_line.append(p)
+        metric_lines.append(metric_line)
+
+    extended_metric_lines = []
+    for line in metric_lines:
+        # nur Kurven mit mehr als 2 Stützpunkten verlängern
+        if len(line) > 2:
+            ext_line = _extend_line_both_ends(line, extend_m)
+        else:
+            ext_line = line
+        extended_metric_lines.append(ext_line)
+
+    wgs_lines = []
+    for line in extended_metric_lines:
+        wgs_line = []
+        for pt in line:
+            p = QgsPointXY(pt.x(), pt.y())
+            if to_wgs:
+                try:
+                    p = to_wgs.transform(p)
+                except Exception:
+                    return None
+            elif source_crs.isValid() and source_crs != wgs84 and not to_metric:
+                try:
+                    direct_to_wgs = QgsCoordinateTransform(source_crs, wgs84, project_ctx)
+                    p = direct_to_wgs.transform(p)
+                except Exception:
+                    return None
+            wgs_line.append(p)
+        wgs_lines.append(wgs_line)
+
+    try:
+        if len(wgs_lines) == 1:
+            return QgsGeometry.fromPolylineXY(wgs_lines[0])
+        return QgsGeometry.fromMultiPolylineXY(wgs_lines)
+    except Exception:
+        return None
+
+def _geometry_to_lines_xy(geom):
+    """
+    Wandelt eine Linien-Geometrie robust in eine Liste von Linien um.
+    Rückgabeformat:
+        [
+            [QgsPointXY, QgsPointXY, ...],   # eine Linie
+            [QgsPointXY, QgsPointXY, ...],   # weitere Linie
+        ]
+    Funktioniert für:
+    - LineString
+    - MultiLineString
+    """
+    if geom is None or geom.isEmpty():
+        return []
+
+    # zuerst versuchen: MultiLine
+    try:
+        lines = geom.asMultiPolyline()
+        if lines:
+            return lines
+    except Exception:  # nosec B110
+        pass
+
+    # dann versuchen: einzelne Line
+    try:
+        line = geom.asPolyline()
+        if line:
+            return [line]
+    except Exception:  # nosec B110
+        pass
+
+    return []
+
+
 class AddFarmDialog(QDialog):
     def __init__(self, customers, parent=None):
         super().__init__(parent)
@@ -3062,7 +3304,13 @@ class LkTechnikPathPlanner:
 
         if is_aggps:
             try:
-                ok = export_aggps(self, out_dir, selected)
+                ok = export_aggps(
+                    self, out_dir, selected,
+                    densify_enabled=densify_curves,
+                    interval_m=densify_interval_m,
+                    extend_enabled=extend_curves,
+                    extend_m=extend_curves_m
+                )
                 if ok:
                     self.iface.messageBar().pushMessage(
                         _tr("Erfolgreich"),
@@ -3090,7 +3338,13 @@ class LkTechnikPathPlanner:
 
         if is_john_deere:
             try:
-                ok = export_john_deere_gen4(self, out_dir, selected)
+                ok = export_john_deere_gen4(
+                    self, out_dir, selected,
+                    densify_enabled=densify_curves,
+                    interval_m=densify_interval_m,
+                    extend_enabled=extend_curves,
+                    extend_m=extend_curves_m
+                )
                 if ok:
                     self.iface.messageBar().pushMessage(
                         _tr("Erfolgreich"),
@@ -3261,247 +3515,6 @@ class LkTechnikPathPlanner:
                             for pt in hole_ring:
                                 lon, lat = _to_wgs_xy_from_point(pt, ct)
                                 ET.SubElement(lsg_hole, 'PNT', {'A': '2', 'C': _fmt_coord(lat), 'D': _fmt_coord(lon)})
-
-                def _metric_crs_for_layer(layer):
-                    """
-                    Liefert ein metrisches CRS für die Verdichtung.
-                    Priorität:
-                    1) Layer-CRS, wenn metrisch
-                    2) Projekt-CRS, wenn metrisch
-                    3) fallback: EPSG:32633
-                    """
-                    try:
-                        if layer and layer.crs().isValid() and layer.crs().mapUnits() == Qgis.DistanceUnit.Meters:
-                            return layer.crs()
-                    except Exception:  # nosec B110
-                        pass
-
-                    try:
-                        prj_crs = QgsProject.instance().crs()
-                        if prj_crs.isValid() and prj_crs.mapUnits() == Qgis.DistanceUnit.Meters:
-                            return prj_crs
-                    except Exception:  # nosec B110
-                        pass
-
-                    return QgsCoordinateReferenceSystem("EPSG:32633")
-
-
-                def _densify_geometry_for_export(geom, source_layer, interval_m):
-                    """
-                    Verdichtet eine Geometrie NUR auf einer Kopie.
-                    Rückgabe in WGS84-Geometrie, damit der restliche Export unverändert bleibt.
-                    """
-                    if geom is None or geom.isEmpty():
-                        return None
-
-                    try:
-                        geom_copy = QgsGeometry(geom)
-                    except Exception:
-                        geom_copy = geom.constGet().clone()
-                        geom_copy = QgsGeometry(geom_copy)
-
-                    metric_crs = _metric_crs_for_layer(source_layer)
-                    source_crs = source_layer.crs()
-                    wgs84 = QgsCoordinateReferenceSystem("EPSG:4326")
-                    project_ctx = QgsProject.instance()
-
-                    to_metric = None
-                    to_wgs = None
-
-                    try:
-                        if source_crs.isValid() and source_crs != metric_crs:
-                            to_metric = QgsCoordinateTransform(source_crs, metric_crs, project_ctx)
-                    except Exception:
-                        to_metric = None
-
-                    try:
-                        if metric_crs.isValid() and metric_crs != wgs84:
-                            to_wgs = QgsCoordinateTransform(metric_crs, wgs84, project_ctx)
-                    except Exception:
-                        to_wgs = None
-
-                    if to_metric:
-                        try:
-                            geom_copy.transform(to_metric)
-                        except Exception:
-                            return None
-
-                    try:
-                        geom_copy = geom_copy.densifyByDistance(interval_m)
-                    except Exception:
-                        return None
-
-                    if to_wgs:
-                        try:
-                            geom_copy.transform(to_wgs)
-                        except Exception:
-                            return None
-                    elif source_crs.isValid() and source_crs != wgs84:
-                        try:
-                            direct_to_wgs = QgsCoordinateTransform(source_crs, wgs84, project_ctx)
-                            geom_copy.transform(direct_to_wgs)
-                        except Exception:
-                            return None
-
-                    return geom_copy
-                
-                def _extend_line_both_ends(line_pts, extend_m):
-                    """
-                    Verlängert eine einzelne Linie an Anfang und Ende um extend_m Meter.
-                    Erwartet Punkte in einem metrischen CRS.
-                    Gibt eine neue Punktliste zurück.
-                    """
-                    if not line_pts or len(line_pts) < 2 or extend_m <= 0:
-                        return line_pts
-
-                    new_line = list(line_pts)
-
-                    # Anfang verlängern: Richtung aus erstem Segment ableiten
-                    p0 = new_line[0]
-                    p1 = new_line[1]
-                    dx0 = p1.x() - p0.x()
-                    dy0 = p1.y() - p0.y()
-                    len0 = math.hypot(dx0, dy0)
-
-                    if len0 > 0:
-                        ux0 = dx0 / len0
-                        uy0 = dy0 / len0
-                        new_start = QgsPointXY(
-                            p0.x() - ux0 * extend_m,
-                            p0.y() - uy0 * extend_m
-                        )
-                        new_line[0] = new_start
-
-                    # Ende verlängern: Richtung aus letztem Segment ableiten
-                    pn1 = new_line[-2]
-                    pn = new_line[-1]
-                    dx1 = pn.x() - pn1.x()
-                    dy1 = pn.y() - pn1.y()
-                    len1 = math.hypot(dx1, dy1)
-
-                    if len1 > 0:
-                        ux1 = dx1 / len1
-                        uy1 = dy1 / len1
-                        new_end = QgsPointXY(
-                            pn.x() + ux1 * extend_m,
-                            pn.y() + uy1 * extend_m
-                        )
-                        new_line[-1] = new_end
-
-                    return new_line
-                
-                def _extend_geometry_for_export(geom, source_layer, extend_m):
-                    """
-                    Verlängert Liniengeometrien an Anfang und Ende um extend_m Meter.
-                    Arbeitet nur auf einer Kopie und gibt WGS84-Geometrie zurück.
-                    """
-                    if geom is None or geom.isEmpty() or extend_m <= 0:
-                        return None
-
-                    lines_src = _geometry_to_lines_xy(geom)
-                    if not lines_src:
-                        return None
-
-                    metric_crs = _metric_crs_for_layer(source_layer)
-                    source_crs = source_layer.crs()
-                    wgs84 = QgsCoordinateReferenceSystem("EPSG:4326")
-                    project_ctx = QgsProject.instance()
-
-                    to_metric = None
-                    to_wgs = None
-
-                    try:
-                        if source_crs.isValid() and source_crs != metric_crs:
-                            to_metric = QgsCoordinateTransform(source_crs, metric_crs, project_ctx)
-                    except Exception:
-                        to_metric = None
-
-                    try:
-                        if metric_crs.isValid() and metric_crs != wgs84:
-                            to_wgs = QgsCoordinateTransform(metric_crs, wgs84, project_ctx)
-                    except Exception:
-                        to_wgs = None
-
-                    metric_lines = []
-                    for line in lines_src:
-                        metric_line = []
-                        for pt in line:
-                            p = QgsPointXY(pt.x(), pt.y())
-                            if to_metric:
-                                try:
-                                    p = to_metric.transform(p)
-                                except Exception:
-                                    return None
-                            metric_line.append(p)
-                        metric_lines.append(metric_line)
-
-                    extended_metric_lines = []
-                    for line in metric_lines:
-                        # nur Kurven mit mehr als 2 Stützpunkten verlängern
-                        if len(line) > 2:
-                            ext_line = _extend_line_both_ends(line, extend_m)
-                        else:
-                            ext_line = line
-                        extended_metric_lines.append(ext_line)
-
-                    wgs_lines = []
-                    for line in extended_metric_lines:
-                        wgs_line = []
-                        for pt in line:
-                            p = QgsPointXY(pt.x(), pt.y())
-                            if to_wgs:
-                                try:
-                                    p = to_wgs.transform(p)
-                                except Exception:
-                                    return None
-                            elif source_crs.isValid() and source_crs != wgs84 and not to_metric:
-                                try:
-                                    direct_to_wgs = QgsCoordinateTransform(source_crs, wgs84, project_ctx)
-                                    p = direct_to_wgs.transform(p)
-                                except Exception:
-                                    return None
-                            wgs_line.append(p)
-                        wgs_lines.append(wgs_line)
-
-                    try:
-                        if len(wgs_lines) == 1:
-                            return QgsGeometry.fromPolylineXY(wgs_lines[0])
-                        return QgsGeometry.fromMultiPolylineXY(wgs_lines)
-                    except Exception:
-                        return None
-                
-                def _geometry_to_lines_xy(geom):
-                    """
-                    Wandelt eine Linien-Geometrie robust in eine Liste von Linien um.
-                    Rückgabeformat:
-                        [
-                            [QgsPointXY, QgsPointXY, ...],   # eine Linie
-                            [QgsPointXY, QgsPointXY, ...],   # weitere Linie
-                        ]
-                    Funktioniert für:
-                    - LineString
-                    - MultiLineString
-                    """
-                    if geom is None or geom.isEmpty():
-                        return []
-
-                    # zuerst versuchen: MultiLine
-                    try:
-                        lines = geom.asMultiPolyline()
-                        if lines:
-                            return lines
-                    except Exception:  # nosec B110
-                        pass
-
-                    # dann versuchen: einzelne Line
-                    try:
-                        line = geom.asPolyline()
-                        if line:
-                            return [line]
-                    except Exception:  # nosec B110
-                        pass
-
-                    return []
 
                 def _export_lines_from_feature(
                     track_feature,
