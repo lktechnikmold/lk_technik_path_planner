@@ -165,6 +165,54 @@ def export_john_deere_gen4(
             heading += 360.0
         return heading
 
+    def _ensure_min_curve_points(line_lonlat, min_count=5):
+        """
+        Stellt sicher, dass eine Kurve (mehr als 2 Stützpunkte) mindestens
+        min_count Stützpunkte hat - John Deere Gen4 erkennt eine Linie erst
+        ab 5 Stützpunkten als Kurve (ABCurve), sonst wird sie fälschlich als
+        Gerade behandelt. Fehlende Punkte werden direkt AUF der Kurve
+        eingefügt (linear zwischen den bestehenden Punkten interpoliert,
+        bevorzugt auf den jeweils längsten Teilstücken) - die vorhandenen
+        Punkte und damit die Form der Kurve bleiben unverändert erhalten.
+        """
+        n = len(line_lonlat)
+        if n >= min_count or n < 2:
+            return line_lonlat
+
+        missing = min_count - n
+        segments = n - 1
+
+        seg_lengths = []
+        for i in range(segments):
+            p0 = line_lonlat[i]
+            p1 = line_lonlat[i + 1]
+            seg_lengths.append(math.hypot(p1[0] - p0[0], p1[1] - p0[1]))
+
+        # fehlende Punkte auf die (nach bisherigen Zuteilungen) jeweils
+        # längsten Segmente verteilen, fuer moeglichst gleichmaessigen Abstand
+        extra_per_segment = [0] * segments
+        for _ in range(missing):
+            idx = max(
+                range(segments),
+                key=lambda i: seg_lengths[i] / (extra_per_segment[i] + 1)
+            )
+            extra_per_segment[idx] += 1
+
+        result = [line_lonlat[0]]
+        for i in range(segments):
+            p0 = line_lonlat[i]
+            p1 = line_lonlat[i + 1]
+            k = extra_per_segment[i]
+            for j in range(1, k + 1):
+                t = j / (k + 1)
+                result.append([
+                    p0[0] + (p1[0] - p0[0]) * t,
+                    p0[1] + (p1[1] - p0[1]) * t
+                ])
+            result.append(p1)
+
+        return result
+
     def _write_boundary_geojson(path, geometry):
         data = {
             "type": "FeatureCollection",
@@ -660,6 +708,13 @@ def export_john_deere_gen4(
                     else:
                         # Alle Punkte in WGS84 umrechnen
                         line_lonlat = [_pt_to_lonlat(pt, ct_line) for pt in line]
+
+                    # John Deere Gen4 erkennt eine Kurve erst ab 5 Stützpunkten -
+                    # bei weniger (z.B. 3 oder 4) faelschlich als Gerade. Immer
+                    # anwenden, unabhaengig von den Verdichten/Verlaengern-
+                    # Optionen oben.
+                    if len(line_lonlat) > 2:
+                        line_lonlat = _ensure_min_curve_points(line_lonlat, min_count=5)
 
                     a_lon, a_lat = line_lonlat[0]
                     b_lon, b_lat = line_lonlat[1]
