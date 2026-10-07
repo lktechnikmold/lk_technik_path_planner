@@ -99,7 +99,7 @@ except Exception:
 from qgis.core import (
     Qgis, QgsProject, QgsVectorLayer, QgsField, QgsFields, QgsFeature, QgsGeometry, QgsPointXY,
     QgsLayerTreeGroup, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsVectorFileWriter,
-    QgsFeatureSink, QgsWkbTypes, QgsEditorWidgetSetup
+    QgsFeatureSink, QgsWkbTypes, QgsEditorWidgetSetup, QgsDistanceArea, QgsUnitTypes
 )
 
 def _tr(message: str) -> str:
@@ -646,6 +646,86 @@ def _geometry_to_lines_xy(geom):
         pass
 
     return []
+
+
+def _polygon_parts(geom):
+    """
+    Zerlegt eine (Multi-)Polygon-Geometrie in ihre Teilpolygone. Jedes Teilpolygon
+    ist eine Ringliste [außenring, loch1, loch2, ...] (Listen von QgsPointXY).
+    """
+    if geom is None or geom.isEmpty():
+        return []
+    polys = geom.asMultiPolygon() if geom.isMultipart() else [geom.asPolygon()]
+    return [p for p in polys if p]
+
+
+def _group_polygon_rings(items):
+    """
+    Gruppiert die Ringe einer ISOXML-PLN zu Polygonen mit Löchern - unabhängig
+    von der Reihenfolge der LSG-Elemente im Dokument.
+
+    items: Liste von (typ, ring) in Dokumentreihenfolge; typ "1" = Außenring
+    (PolygonExterior), "2" = Loch (PolygonInterior); ring = Liste QgsPointXY.
+    Rückgabe: Liste von Index-Gruppen [[idx_außenring, idx_loch, ...], ...].
+
+    Ein Loch gehört zum Außenring, der es enthält. Gibt es nur einen
+    Außenring, bekommt er alle Löcher (auch wenn ein Loch im Dokument VOR dem
+    Außenring steht). Bei mehreren Außenringen und ohne Treffer per
+    Enthaltensein fällt die Zuordnung auf den im Dokument vorangehenden
+    Außenring zurück.
+    """
+    groups = []
+    holes = []   # (idx, Slot des zuletzt davor gelesenen Außenrings oder -1)
+    prev = -1
+    for idx, (kind, ring) in enumerate(items):
+        if len(ring) <= 2:
+            if kind == "1":
+                prev = -1
+            continue
+        if kind == "1":
+            groups.append([idx])
+            prev = len(groups) - 1
+        elif kind == "2":
+            holes.append((idx, prev))
+
+    if not groups:
+        return []
+
+    ext_polys = None
+    for idx, prev_slot in holes:
+        target = None
+        if len(groups) == 1:
+            target = 0
+        else:
+            # Ein Loch gehört dem KLEINSTEN Außenring, der es (praktisch) ganz
+            # überdeckt. "Kleinster" ist wichtig: liegen Inseln (weitere
+            # Außenringe) innerhalb eines großen Lochs, darf das Loch nicht
+            # einer solchen Insel zugeordnet werden, nur weil ein Punkt des
+            # Lochs zufällig in der Insel liegt.
+            try:
+                if ext_polys is None:
+                    ext_polys = [QgsGeometry.fromPolygonXY([items[grp[0]][1]]) for grp in groups]
+                hole_poly = QgsGeometry.fromPolygonXY([items[idx][1]])
+                hole_area = hole_poly.area()
+                best = None
+                if hole_area > 0:
+                    for g_i, ext_poly in enumerate(ext_polys):
+                        try:
+                            covered = ext_poly.intersection(hole_poly).area() / hole_area
+                        except Exception:  # nosec B112
+                            continue
+                        if covered >= 0.99 and (best is None or ext_poly.area() < best[0]):
+                            best = (ext_poly.area(), g_i)
+                if best is not None:
+                    target = best[1]
+            except Exception:  # nosec B110
+                pass
+            if target is None and prev_slot >= 0:
+                target = prev_slot
+        if target is not None:
+            groups[target].append(idx)
+
+    return groups
 
 
 class AddFarmDialog(QDialog):
@@ -2957,9 +3037,6 @@ class LkTechnikPathPlanner:
             # LSG A=1 + je Loch ein LSG A=2) -> sauberer Roundtrip.
             boundary_feats = []
             for pln_b in pfd.findall("PLN[@A='1']"):
-                current_rings = []         # [aussenring, loch1, loch2, ...] (Ziel-KBS)
-                current_rings_wgs84 = []   # dieselbe Struktur in WGS84 (für Flächenberechnung)
-
                 def _flush_boundary_ring(rings, rings_wgs84):
                     if not rings or len(rings[0]) <= 2:
                         return
@@ -2979,9 +3056,15 @@ class LkTechnikPathPlanner:
                     feat_f.setGeometry(QgsGeometry.fromPolygonXY(rings))
                     boundary_feats.append(feat_f)
 
+                ring_items = []        # (typ, ring im Ziel-KBS) in Dokumentreihenfolge
+                ring_items_wgs84 = []  # dieselben Ringe in WGS84 (für die Flächenberechnung)
                 for lsg_field in pln_b.findall("LSG"):
                     a_val = lsg_field.get("A")
                     if a_val not in ("1", "2"):
+                        continue
+                    # Legacy-Hindernis-LSGs (A=2 mit P094_Impassable) sind KEINE
+                    # Löcher - die behandelt der Legacy-Block weiter unten separat.
+                    if a_val == "2" and lsg_field.get("P094_Impassable") is not None:
                         continue
 
                     ring_pts = []
@@ -2994,20 +3077,16 @@ class LkTechnikPathPlanner:
                             ring_pts_wgs84.append(QgsPointXY(lon, lat))
                             ring_pts.append(_tx_pt_xy(lon, lat))
 
-                    if a_val == "1":
-                        # neuer Außenring -> vorheriges Polygon (falls vorhanden) abschließen
-                        _flush_boundary_ring(current_rings, current_rings_wgs84)
-                        current_rings = [ring_pts] if len(ring_pts) > 2 else []
-                        current_rings_wgs84 = [ring_pts_wgs84] if len(ring_pts_wgs84) > 2 else []
-                    elif (a_val == "2" and current_rings and len(ring_pts) > 2
-                          and lsg_field.get("P094_Impassable") is None):
-                        # Loch im aktuellen Außenring (Legacy-Hindernis-LSGs mit
-                        # P094_Impassable werden bewusst NICHT als Loch übernommen,
-                        # die behandelt der Legacy-Block weiter unten separat).
-                        current_rings.append(ring_pts)
-                        current_rings_wgs84.append(ring_pts_wgs84)
+                    ring_items.append((a_val, ring_pts))
+                    ring_items_wgs84.append(ring_pts_wgs84)
 
-                _flush_boundary_ring(current_rings, current_rings_wgs84)
+                # je Außenring (LSG A=1) ein Feature; Löcher (LSG A=2) werden dem
+                # Außenring zugeordnet, der sie enthält - reihenfolgeunabhängig.
+                for grp in _group_polygon_rings(ring_items):
+                    _flush_boundary_ring(
+                        [ring_items[i][1] for i in grp],
+                        [ring_items_wgs84[i] for i in grp]
+                    )
 
             if boundary_feats:
                 dp_field.addFeatures(boundary_feats)
@@ -3021,7 +3100,6 @@ class LkTechnikPathPlanner:
                 if hind_type not in ("6", "8"):
                     continue
                 bf_val = 1 if hind_type == "8" else 0
-                current_rings2 = []
 
                 def _flush_area_ring(rings):
                     if not rings or len(rings[0]) <= 2:
@@ -3031,6 +3109,7 @@ class LkTechnikPathPlanner:
                     feat_a.setGeometry(QgsGeometry.fromPolygonXY(rings))
                     dp_area.addFeatures([feat_a])
 
+                ring_items2 = []
                 for lsg_hind in hind_pln.findall("LSG"):
                     a_val2 = lsg_hind.get("A")
                     if a_val2 not in ("1", "2"):
@@ -3040,13 +3119,10 @@ class LkTechnikPathPlanner:
                         if pnt2.get("A") in ("10", "2"):
                             lat2 = float(pnt2.get("C", "0")); lon2 = float(pnt2.get("D", "0"))
                             ring2.append(_tx_pt_xy(lon2, lat2))
-                    if a_val2 == "1":
-                        _flush_area_ring(current_rings2)
-                        current_rings2 = [ring2] if len(ring2) > 2 else []
-                    elif a_val2 == "2" and current_rings2 and len(ring2) > 2:
-                        current_rings2.append(ring2)
+                    ring_items2.append((a_val2, ring2))
 
-                _flush_area_ring(current_rings2)
+                for grp2 in _group_polygon_rings(ring_items2):
+                    _flush_area_ring([ring_items2[i][1] for i in grp2])
 
             # Area obstacles - Legacy-Format aus aelteren Exporten (< Fix vom Juli 2026):
             # P094_Impassable war ein nicht-normkonformes Custom-Attribut auf einer LSG,
@@ -3491,30 +3567,36 @@ class LkTechnikPathPlanner:
                         return pxy.x(), pxy.y()  # lon, lat
                     return x, y
 
-                def _write_polygon_rings(pln_element, geom, ct):
+                def _write_polygon_part(pln_element, polygon, ct):
                     """
-                    Schreibt die Ringe einer (Multi-)Polygon-Geometrie als LSG-Kinder
-                    von pln_element: je Polygonteil ein LSG A=1 (Außenring), gefolgt
-                    von je einem LSG A=2 pro Loch (Innenring) dieses Teils - siehe
-                    ISO 11783-10 PolygonType 1=PolygonExterior / 2=PolygonInterior.
+                    Schreibt EIN Polygon (Ringliste [außenring, loch1, ...]) als
+                    LSG-Kinder von pln_element: genau ein LSG A=1 (Außenring),
+                    gefolgt von je einem LSG A=2 pro Loch (Innenring). Nach
+                    ISO 11783-10 darf eine PLN höchstens einen Außenring (outer
+                    boundary) enthalten - Multipolygone werden deshalb vom
+                    Aufrufer auf mehrere PLN verteilt (siehe _polygon_parts).
                     """
-                    polys = geom.asMultiPolygon() or []
-                    if not polys:
-                        single = geom.asPolygon()
-                        if single:
-                            polys = [single]
-                    for polygon in polys:
-                        if not polygon:
-                            continue
-                        lsg_ext = ET.SubElement(pln_element, 'LSG', {'A': '1'})
-                        for pt in polygon[0]:
+                    lsg_ext = ET.SubElement(pln_element, 'LSG', {'A': '1'})
+                    for pt in polygon[0]:
+                        lon, lat = _to_wgs_xy_from_point(pt, ct)
+                        ET.SubElement(lsg_ext, 'PNT', {'A': '2', 'C': _fmt_coord(lat), 'D': _fmt_coord(lon)})
+                    for hole_ring in polygon[1:]:
+                        lsg_hole = ET.SubElement(pln_element, 'LSG', {'A': '2'})
+                        for pt in hole_ring:
                             lon, lat = _to_wgs_xy_from_point(pt, ct)
-                            ET.SubElement(lsg_ext, 'PNT', {'A': '2', 'C': _fmt_coord(lat), 'D': _fmt_coord(lon)})
-                        for hole_ring in polygon[1:]:
-                            lsg_hole = ET.SubElement(pln_element, 'LSG', {'A': '2'})
-                            for pt in hole_ring:
-                                lon, lat = _to_wgs_xy_from_point(pt, ct)
-                                ET.SubElement(lsg_hole, 'PNT', {'A': '2', 'C': _fmt_coord(lat), 'D': _fmt_coord(lon)})
+                            ET.SubElement(lsg_hole, 'PNT', {'A': '2', 'C': _fmt_coord(lat), 'D': _fmt_coord(lon)})
+
+                def _part_area_m2(polygon, layer):
+                    """Ellipsoidische Fläche (m²) eines Teilpolygons im KBS des Layers; None bei Fehler."""
+                    try:
+                        da = QgsDistanceArea()
+                        da.setSourceCrs(layer.crs(), QgsProject.instance().transformContext())
+                        ell = QgsProject.instance().ellipsoid()
+                        da.setEllipsoid(ell if ell and ell != "NONE" else "WGS84")
+                        raw = da.measureArea(QgsGeometry.fromPolygonXY(polygon))
+                        return float(da.convertAreaMeasurement(raw, QgsUnitTypes.AreaSquareMeters))
+                    except Exception:
+                        return None
 
                 def _export_lines_from_feature(
                     track_feature,
@@ -3649,19 +3731,28 @@ class LkTechnikPathPlanner:
                             except Exception:
                                 barea = field_area
 
-                        pln_attrs = {'A': '1', 'B': str(bname), 'C': str(int(barea))}
-                        if not is_v3:
-                            # PolygonId (E) gibt es erst ab v4 und muss dokumentweit eindeutig sein
-                            # (xs:ID) - daher ein global fortlaufender Zaehler statt field_id, das bei
-                            # mehreren Grenzen pro Feld sonst mehrfach vergeben wuerde.
-                            pln_attrs['E'] = f'PLN{pln_global}'
-                            pln_global += 1
-                        this_pln = ET.SubElement(pfd_element, 'PLN', pln_attrs)
-                        if pln_element is None:
-                            pln_element = this_pln
-
-                        geom = bf.geometry()
-                        _write_polygon_rings(this_pln, geom, ct_poly)
+                        # Eine PLN enthaelt hoechstens EINEN Aussenring (LSG A=1, ISO 11783-10),
+                        # dazu beliebig viele Loecher (LSG A=2). Besteht die Feldgrenze aus
+                        # mehreren Teilpolygonen (Multipolygon), bekommt daher jedes Teil
+                        # eine eigene PLN mit demselben Namen.
+                        parts = _polygon_parts(bf.geometry())
+                        for part in parts:
+                            pln_attrs = {'A': '1', 'B': str(bname), 'C': str(int(barea))}
+                            if len(parts) > 1:
+                                # Flaeche je Teil statt der Gesamtflaeche der Feldgrenze
+                                part_area = _part_area_m2(part, polygon_layer)
+                                if part_area is not None:
+                                    pln_attrs['C'] = str(int(part_area))
+                            if not is_v3:
+                                # PolygonId (E) gibt es erst ab v4 und muss dokumentweit eindeutig sein
+                                # (xs:ID) - daher ein global fortlaufender Zaehler statt field_id, das bei
+                                # mehreren Grenzen pro Feld sonst mehrfach vergeben wuerde.
+                                pln_attrs['E'] = f'PLN{pln_global}'
+                                pln_global += 1
+                            this_pln = ET.SubElement(pfd_element, 'PLN', pln_attrs)
+                            if pln_element is None:
+                                pln_element = this_pln
+                            _write_polygon_part(this_pln, part, ct_poly)
 
                     #Area obstacles
                     if fh_layer is not None:
@@ -3682,13 +3773,14 @@ class LkTechnikPathPlanner:
                             # PLN mit offiziellem PolygonType: "6"=Obstacle (nicht befahrbar) bzw.
                             # "8"=Other (befahrbar, aber markierte Flaeche).
                             hind_poly_type = '6' if bf_val == 0 else '8'
-                            hind_pln_attrs = {'A': hind_poly_type, 'C': str(0)}
-                            if not is_v3:
-                                hind_pln_attrs['E'] = f'PLN{pln_global}'
-                                pln_global += 1
-                            hind_pln = ET.SubElement(pfd_element, 'PLN', hind_pln_attrs)
-                            fh_geom = fh_feature.geometry()
-                            _write_polygon_rings(hind_pln, fh_geom, ct_area)
+                            # je Teilpolygon eine eigene PLN (max. ein Aussenring pro PLN)
+                            for hind_part in _polygon_parts(fh_feature.geometry()):
+                                hind_pln_attrs = {'A': hind_poly_type, 'C': str(0)}
+                                if not is_v3:
+                                    hind_pln_attrs['E'] = f'PLN{pln_global}'
+                                    pln_global += 1
+                                hind_pln = ET.SubElement(pfd_element, 'PLN', hind_pln_attrs)
+                                _write_polygon_part(hind_pln, hind_part, ct_area)
 
                     #Point obstacles
                     if point_layer is not None:

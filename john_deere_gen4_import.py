@@ -79,6 +79,11 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
 
     ns = {"jd": "urn:schemas-johndeere-com:Setup"}
 
+    try:
+        from .lk_technik_path_planner import _group_polygon_rings
+    except Exception:
+        from lk_technik_path_planner import _group_polygon_rings
+
     src_crs = QgsCoordinateReferenceSystem("EPSG:4326")
     use_project_crs = plugin.dlg.rb_import_project.isChecked()
     target_crs = QgsProject.instance().crs() if use_project_crs else src_crs
@@ -493,25 +498,39 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
         layers = _ensure_farm_layers(farm_guid)
         layer = layers["Feldgrenzen"]
 
-        # ALLE Features UND jedes Polygon einzeln einlesen: ein MultiPolygon
-        # (bzw. mehrere Features) wird in je eine Feldgrenze pro Polygon mit
-        # derselben Feld-ID aufgeteilt (analog zum ISOXML-Import).
-        boundary_feats = []
+        # Alle Features einlesen. Das John Deere Operations Center schreibt pro
+        # Ring ein eigenes Feature: boundarytype "Exterior" = Außenring,
+        # "Interior" = Loch (jeweils als Polygon mit einem Ring). Ältere Exporte
+        # dieses Plugins legten Löcher dagegen als weitere Ringe INNERHALB des
+        # Exterior-Polygons ab - beides wird gelesen. Je Außenring entsteht eine
+        # Feldgrenze mit derselben Feld-ID (analog zum ISOXML-Import); Löcher
+        # werden dem Außenring zugeordnet, der sie enthält.
+        ring_items = []      # (typ "1"=Aussenring / "2"=Loch, Ring im Ziel-KBS)
+        ring_items_src = []  # dieselben Ringe in Quellkoordinaten (Flaechenberechnung)
         for feature in features:
             geom_json = feature.get("geometry")
             if not geom_json:
                 continue
+            props = feature.get("properties") or {}
+            is_interior = str(props.get("boundarytype", "")).strip().lower() == "interior"
             for rings_xy, rings_src in _iter_polygons_from_geojson_geometry(geom_json):
-                if not rings_xy:
-                    continue
-                # Fläche IMMER aus der Geometrie berechnen (nie aus der Datei).
-                calc_area = _calc_area_from_ring_coords_wgs84(rings_src)
-                feat = QgsFeature(layer.fields())
-                feat.setAttribute("ID", int(field_info["field_id"]))
-                feat.setAttribute("Name", boundary_name)
-                feat.setAttribute("Flaeche", calc_area)
-                feat.setGeometry(QgsGeometry.fromPolygonXY(rings_xy))
-                boundary_feats.append(feat)
+                for j, (ring_xy, ring_src) in enumerate(zip(rings_xy, rings_src)):
+                    kind = "2" if (is_interior or j > 0) else "1"
+                    ring_items.append((kind, ring_xy))
+                    ring_items_src.append(ring_src)
+
+        boundary_feats = []
+        for grp in _group_polygon_rings(ring_items):
+            rings_xy = [ring_items[i][1] for i in grp]
+            rings_src = [ring_items_src[i] for i in grp]
+            # Fläche IMMER aus der Geometrie berechnen (nie aus der Datei).
+            calc_area = _calc_area_from_ring_coords_wgs84(rings_src)
+            feat = QgsFeature(layer.fields())
+            feat.setAttribute("ID", int(field_info["field_id"]))
+            feat.setAttribute("Name", boundary_name)
+            feat.setAttribute("Flaeche", calc_area)
+            feat.setGeometry(QgsGeometry.fromPolygonXY(rings_xy))
+            boundary_feats.append(feat)
 
         if boundary_feats:
             layer.dataProvider().addFeatures(boundary_feats)

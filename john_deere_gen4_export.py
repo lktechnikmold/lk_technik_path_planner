@@ -62,11 +62,13 @@ def export_john_deere_gen4(
     # "Kurven an den Enden verlängern" auch beim Gen4-Export wirken.
     try:
         from .lk_technik_path_planner import (
-            _geometry_to_lines_xy, _densify_geometry_for_export, _extend_geometry_for_export
+            _geometry_to_lines_xy, _densify_geometry_for_export, _extend_geometry_for_export,
+            _polygon_parts
         )
     except Exception:
         from lk_technik_path_planner import (
-            _geometry_to_lines_xy, _densify_geometry_for_export, _extend_geometry_for_export
+            _geometry_to_lines_xy, _densify_geometry_for_export, _extend_geometry_for_export,
+            _polygon_parts
         )
 
     def _iter_ctr_groups():
@@ -213,27 +215,76 @@ def export_john_deere_gen4(
 
         return result
 
-    def _write_boundary_geojson(path, geometry):
-        data = {
-            "type": "FeatureCollection",
-            "features": [
-                {
-                    "id": 0,
-                    "type": "Feature",
-                    "properties": {
-                        "boundarytype": "Exterior",
-                        "creationMethod": 501898,
-                        "isactive": True,
-                        "ispassable": False,
-                        "name": None,
-                        "offsetid": None,
-                        "parent": None,
-                        "signaltype": 0
-                    },
-                    "geometry": geometry
-                }
-            ]
-        }
+    def _signed_area_lonlat(ring):
+        """Vorzeichenbehaftete Flaeche (Shoelace) im lon/lat-Raum: >0 = gegen den Uhrzeigersinn."""
+        s = 0.0
+        for (x1, y1), (x2, y2) in zip(ring, ring[1:]):
+            s += x1 * y2 - x2 * y1
+        return s / 2.0
+
+    def _boundary_parts_lonlat(feature, ct):
+        """
+        Zerlegt eine Feldgrenze in Teilpolygone. Jedes Teilpolygon ist eine Liste
+        geschlossener [lon, lat]-Ringe: [außenring, loch1, loch2, ...]. Ringrichtung
+        wie vom John Deere Operations Center erzeugt: Außenring im Uhrzeigersinn,
+        Löcher gegen den Uhrzeigersinn.
+        """
+        parts_out = []
+        for polygon in _polygon_parts(feature.geometry()):
+            rings_out = []
+            for i, ring in enumerate(polygon):
+                coords = [_pt_to_lonlat(pt, ct) for pt in ring]
+                if coords and coords[0] != coords[-1]:
+                    coords.append(coords[0])
+                if len(coords) < 4:
+                    if i == 0:
+                        rings_out = []   # ungueltiger Aussenring -> ganzes Teil verwerfen
+                        break
+                    continue
+                want_ccw = (i != 0)
+                if (_signed_area_lonlat(coords) > 0) != want_ccw:
+                    coords.reverse()
+                rings_out.append(coords)
+            if rings_out:
+                parts_out.append(rings_out)
+        return parts_out
+
+    def _write_boundary_geojson(path, rings):
+        """
+        Schreibt EINE Feldgrenze (Außenring + Löcher) wie das John Deere Operations
+        Center: ein FeatureCollection mit einem Feature "Exterior" (nur der Außenring)
+        und je einem eigenen Feature "Interior" pro Loch - die Löcher dürfen NICHT als
+        zusätzliche Ringe im Exterior-Polygon stehen, sonst werden sie am Terminal
+        nicht als Loch erkannt.
+        """
+        def _props(boundary_type):
+            return {
+                "boundarytype": boundary_type,
+                "creationMethod": 501899,
+                "isactive": True,
+                "ispassable": False,
+                "name": None,
+                "offsetid": None,
+                "parent": None,
+                "shapeid": str(uuid.uuid4()),
+                "signaltype": 5123
+            }
+
+        features = [{
+            "id": 0,
+            "type": "Feature",
+            "properties": _props("Exterior"),
+            "geometry": {"type": "Polygon", "coordinates": [rings[0]]}
+        }]
+        for idx, hole in enumerate(rings[1:], start=1):
+            features.append({
+                "id": idx,
+                "type": "Feature",
+                "properties": _props("Interior"),
+                "geometry": {"type": "Polygon", "coordinates": [hole]}
+            })
+
+        data = {"type": "FeatureCollection", "features": features}
 
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -482,14 +533,13 @@ def export_john_deere_gen4(
                 # Struktur verlangt: erst alle Felder, dann Guidance, dann alle
                 # OperationalBoundaries. Interleaving macht die Datei am Terminal ungueltig.
                 for bf in boundaries:
-                    geometry = _polygon_feature_to_geojson_geometry(bf, ct_poly)
-                    if geometry is None:
+                    # Eine OperationalBoundary enthaelt genau EINEN Aussenring samt
+                    # Loechern. Besteht die Feldgrenze aus mehreren Teilpolygonen
+                    # (Multipolygon), bekommt jedes Teil eine eigene OperationalBoundary
+                    # (wie beim ISOXML-Export eine PLN je Teil).
+                    parts = _boundary_parts_lonlat(bf, ct_poly)
+                    if not parts:
                         continue
-
-                    boundary_guid = _new_guid()
-                    boundary_filename = f"Boundary{boundary_guid}.gjson"
-                    boundary_path = os.path.join(spatial_dir, boundary_filename)
-                    _write_boundary_geojson(boundary_path, geometry)
 
                     # Name der Grenze: eigener Name der Feldgrenze, sonst Feldname
                     b_name = field_name
@@ -501,12 +551,18 @@ def export_john_deere_gen4(
                         except Exception:  # nosec B110
                             pass
 
-                    boundary_defs.append({
-                        "StringGuid": boundary_guid,
-                        "TaggedEntity": field_guid,
-                        "Name": b_name,
-                        "FilenameWithExtension": boundary_filename,
-                    })
+                    for rings in parts:
+                        boundary_guid = _new_guid()
+                        boundary_filename = f"Boundary{boundary_guid}.gjson"
+                        boundary_path = os.path.join(spatial_dir, boundary_filename)
+                        _write_boundary_geojson(boundary_path, rings)
+
+                        boundary_defs.append({
+                            "StringGuid": boundary_guid,
+                            "TaggedEntity": field_guid,
+                            "Name": b_name,
+                            "FilenameWithExtension": boundary_filename,
+                        })
 
                 exported_any = True
 
