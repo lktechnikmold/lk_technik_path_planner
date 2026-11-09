@@ -218,8 +218,18 @@ def _format_label(fmt: str) -> str:
     }.get(fmt, fmt)
 
 
-def _is_fendt_one(brand: str, model: str) -> bool:
-    return brand == "Fendt" and model == "One"
+# Terminals, die Kontursegmente (Fahrspuren mit gefülltem Segment-Feld) kennen
+CONTOUR_SEGMENT_TERMINALS = {
+    ("Fendt", "One"),
+    ("Fendt", "Vario Terminal INT 01"),
+    ("Valtra", "Smart Touch"),
+    ("Massey Ferguson", "Datatronic 5"),
+    ("ISOXML", "v4"),
+}
+
+
+def _supports_contour_segments(brand: str, model: str) -> bool:
+    return (brand, model) in CONTOUR_SEGMENT_TERMINALS
 
 
 def _felder_csv_path_in_dir(base_dir: str) -> str:
@@ -950,7 +960,7 @@ class ToolboxDialog(QDialog):
             self.cmb_terminal.addItem(f"{brand} – {model}", (brand, model, fmt))
 
         self.lbl_format = QLabel("")
-        # Kontursegmente nur für Fendt One
+        # Kontursegmente nur für Terminals, die sie unterstützen
         self.chk_seg = self._mk_text(QCheckBox(), "Kontursegmente")
 
         def _refresh_terminal_format_label():
@@ -959,7 +969,7 @@ class ToolboxDialog(QDialog):
                 return
             brand, model, fmt = data
             self.lbl_format.setText(f"{_tr('Format:')} {_format_label(fmt)}")
-            seg_visible = _is_fendt_one(brand, model)
+            seg_visible = _supports_contour_segments(brand, model)
             self.chk_seg.setVisible(seg_visible)
             if not seg_visible:
                 self.chk_seg.setChecked(False)
@@ -3331,8 +3341,8 @@ class LkTechnikPathPlanner:
         is_aggps = (term_fmt == "AgGPS")
         is_john_deere = (term_fmt == "Gen4")
         is_v3 = (term_fmt == "3.3")
-        # Kontursegmente nur für Fendt One
-        use_segments = (self.dlg.chk_seg.isChecked() and _is_fendt_one(term_brand, term_model))
+        # Kontursegmente nur für Terminals, die sie unterstützen
+        use_segments = (self.dlg.chk_seg.isChecked() and _supports_contour_segments(term_brand, term_model))
         densify_curves = self.dlg.chk_densify_curves.isChecked()
         densify_interval_m = float(self.dlg.spin_densify_interval.value())
         extend_curves = self.dlg.chk_extend_curves.isChecked()
