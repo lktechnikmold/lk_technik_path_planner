@@ -92,6 +92,15 @@ except Exception:
     from aggps_import import import_aggps, detect_aggps_data_root
 
 try:
+    from .cn1_export import export_cn1, remove_existing_cn1
+    from .cn1_import import import_cn1
+    from .cn1_format import find_cn1_root, existing_cn1_dirs, extract_cn1_zip
+except Exception:
+    from cn1_export import export_cn1, remove_existing_cn1
+    from cn1_import import import_cn1
+    from cn1_format import find_cn1_root, existing_cn1_dirs, extract_cn1_zip
+
+try:
     from . import translations
 except Exception:
     import translations
@@ -162,12 +171,14 @@ FELDER_CSV_DELIM = ";"
 # ============================================================
 # Terminals -> Export-Dateiformat
 # Format-Codes: "3.3" = ISOXML v3, "4.2" = ISOXML v4,
-#               "Gen4" = John Deere Gen4, "AgGPS" = Trimble/Case/NH
+#               "Gen4" = John Deere Gen4, "AgGPS" = Trimble/Case/NH,
+#               "CN1" = CNH (Case IH/Steyr/New Holland)
 # ============================================================
 TERMINALS = [
     ("ISOXML", "v3", "3.3"),
     ("ISOXML", "v4", "4.2"),
-    ("Case/Steyr", "AFS Pro 700", "3.3"),
+    ("CN1", "CNH", "CN1"),
+    ("Case/Steyr", "AFS Pro 700", "CN1"),
     ("Case/Steyr", "AFS Pro 1200", "4.2"),
     ("Case/Steyr", "FM 750", "AgGPS"),
     ("Case/Steyr", "FM 1000", "AgGPS"),
@@ -186,7 +197,7 @@ TERMINALS = [
     ("Massey Ferguson", "Fieldstar 5", "4.2"),
     ("New Holland", "FM 750", "AgGPS"),
     ("New Holland", "FM 1000", "AgGPS"),
-    ("New Holland", "Intelli View 4", "3.3"),
+    ("New Holland", "Intelli View 4", "CN1"),
     ("Raven", "CR7", "4.2"),
     ("Raven", "CR12", "4.2"),
     ("Raven", "Viper 4", "4.2"),
@@ -215,6 +226,7 @@ def _format_label(fmt: str) -> str:
         "4.2": "ISOXML v4",
         "Gen4": "John Deere Gen4",
         "AgGPS": "AgGPS",
+        "CN1": "CNH CN1",
     }.get(fmt, fmt)
 
 
@@ -962,6 +974,9 @@ class ToolboxDialog(QDialog):
         self.lbl_format = QLabel("")
         # Kontursegmente nur für Terminals, die sie unterstützen
         self.chk_seg = self._mk_text(QCheckBox(), "Kontursegmente")
+        # CN1 kennt nur eine Feldgrenze je Feld
+        self.lbl_cn1_hint = self._mk_text(QLabel(), "Es wird nur eine Feldgrenze pro Feld unterstützt")
+        self.lbl_cn1_hint.setStyleSheet("color: #b36b00;")
 
         def _refresh_terminal_format_label():
             data = self.cmb_terminal.currentData()
@@ -973,6 +988,7 @@ class ToolboxDialog(QDialog):
             self.chk_seg.setVisible(seg_visible)
             if not seg_visible:
                 self.chk_seg.setChecked(False)
+            self.lbl_cn1_hint.setVisible(fmt == "CN1")
 
         self._refresh_terminal_format_label = _refresh_terminal_format_label
         self.cmb_terminal.currentIndexChanged.connect(self._refresh_terminal_format_label)
@@ -980,6 +996,7 @@ class ToolboxDialog(QDialog):
         opt_row.addWidget(self.cmb_terminal, 1)
         opt_row.addWidget(self.lbl_format)
         opt_row.addWidget(self.chk_seg)
+        opt_row.addWidget(self.lbl_cn1_hint)
         opt_row.addStretch(1)
         v.addLayout(opt_row)
 
@@ -1085,9 +1102,9 @@ class ToolboxDialog(QDialog):
         def _pick_in_file():
             fn, _ = QFileDialog.getOpenFileName(
                 self,
-                _tr("TASKDATA.XML oder MasterData.xml wählen"),
+                _tr("TASKDATA.XML, MasterData.xml, index.vy1 oder CN1-ZIP wählen"),
                 '',
-                _tr('XML (*.xml);;Alle Dateien (*)')
+                _tr('ISOXML / Gen4 / CN1 (*.xml *.vy1 *.zip);;Alle Dateien (*)')
             )
             if fn:
                 self.in_line.setText(fn)
@@ -1095,7 +1112,7 @@ class ToolboxDialog(QDialog):
         def _pick_in_folder():
             dn = QFileDialog.getExistingDirectory(
                 self,
-                _tr("Ordner wählen (Gen4 / AgGPS / ISOXML)")
+                _tr("Ordner wählen (Gen4 / AgGPS / ISOXML / CN1)")
             )
             if dn:
                 self.in_line.setText(dn)
@@ -1108,7 +1125,7 @@ class ToolboxDialog(QDialog):
         h1.addWidget(btn_file)
         h1.addWidget(btn_folder)
 
-        lay.addRow(self._mk_text(QLabel(), "TASKDATA.XML, Gen4- oder AgGPS-Ordner:"), h1)
+        lay.addRow(self._mk_text(QLabel(), "TASKDATA.XML, Gen4-, AgGPS- oder CN1-Ordner:"), h1)
         self.out_dir_line = QLineEdit()
         btn_dir = self._mk_text(QPushButton(), "…")
         def _pick_dir():
@@ -2782,6 +2799,28 @@ class LkTechnikPathPlanner:
         )
 
     # ------------------------- IMPORT -------------------------
+    def _import_cn1_path(self, path, out_dir):
+        try:
+            ok = import_cn1(self, path, out_dir)
+        except Exception as e:
+            self.iface.messageBar().pushMessage(
+                _tr("Fehler"), _tr("CN1-Import fehlgeschlagen: {e}").format(e=e),
+                level=Qgis.Critical, duration=6
+            )
+            return
+        if not ok:
+            self.iface.messageBar().pushMessage(
+                _tr("Hinweis"), _tr("Keine Felder in den CN1-Daten gefunden."),
+                level=Qgis.Info, duration=5
+            )
+            return
+        self.iface.messageBar().pushMessage(
+            _tr("Erfolgreich"), _tr("CN1-Daten wurden importiert."),
+            level=Qgis.Success, duration=5
+        )
+        self._apply_language_to_project()
+        self.dlg.accept()
+
     def _do_import(self):
         path = self.dlg.in_line.text().strip()
         out_dir = self.dlg.out_dir_line.text().strip() or None
@@ -2802,7 +2841,12 @@ class LkTechnikPathPlanner:
             gen4_master = os.path.join(path, "MasterData.xml")
             isoxml_taskdata = os.path.join(path, "TASKDATA.XML")
 
-            # 0) AgGPS (Shapefile-Ordnerstruktur)
+            # 0) CNH CN1 (<ID>.cn1-Ordner bzw. Ordner, der einen enthält)
+            if find_cn1_root(path):
+                self._import_cn1_path(path, out_dir)
+                return
+
+            # 0b) AgGPS (Shapefile-Ordnerstruktur)
             if detect_aggps_data_root(path):
                 ok = import_aggps(self, path, out_dir)
                 if ok:
@@ -2832,6 +2876,19 @@ class LkTechnikPathPlanner:
 
         elif os.path.isfile(path):
             base = os.path.basename(path).lower()
+            if base == "index.vy1":
+                self._import_cn1_path(path, out_dir)
+                return
+            if base.endswith(".zip"):
+                cn1_root = extract_cn1_zip(path)
+                if cn1_root is None:
+                    self.iface.messageBar().pushMessage(
+                        _tr("Fehler"), _tr("Die ZIP-Datei enthält keine CN1-Daten."),
+                        level=Qgis.Warning, duration=5
+                    )
+                    return
+                self._import_cn1_path(cn1_root, out_dir)
+                return
             if base == "masterdata.xml":
                 gen4_dir = os.path.dirname(path)
                 ok = import_john_deere_gen4(self, gen4_dir, out_dir)
@@ -3418,6 +3475,7 @@ class LkTechnikPathPlanner:
             return
         is_aggps = (term_fmt == "AgGPS")
         is_john_deere = (term_fmt == "Gen4")
+        is_cn1 = (term_fmt == "CN1")
         is_v3 = (term_fmt == "3.3")
         # Kontursegmente nur für Terminals, die sie unterstützen
         use_segments = (self.dlg.chk_seg.isChecked() and _supports_contour_segments(term_brand, term_model))
@@ -3450,11 +3508,16 @@ class LkTechnikPathPlanner:
         elif is_john_deere:
             existing_path = os.path.join(out_dir, "Gen4")
             format_label = "Gen4"
+        elif is_cn1:
+            # CN1-Ordner tragen eine zufällige ID im Namen (<ID>.cn1)
+            cn1_dirs = existing_cn1_dirs(out_dir) if os.path.isdir(out_dir) else []
+            existing_path = cn1_dirs[0] if cn1_dirs else ""
+            format_label = "CN1"
         else:
             existing_path = os.path.join(out_dir, "TASKDATA")
             format_label = "TASKDATA"
 
-        if os.path.exists(existing_path):
+        if existing_path and os.path.exists(existing_path):
             reply = QMessageBox.question(
                 self.iface.mainWindow(),
                 _tr("Überschreiben?"),
@@ -3465,6 +3528,48 @@ class LkTechnikPathPlanner:
             )
             if reply != QMessageBox.Yes:
                 return
+            if is_cn1:
+                remove_existing_cn1(out_dir)
+
+        if is_cn1:
+            try:
+                res = export_cn1(
+                    self, out_dir, selected,
+                    densify_enabled=densify_curves,
+                    interval_m=densify_interval_m,
+                    extend_enabled=extend_curves,
+                    extend_m=extend_curves_m
+                )
+            except Exception as e:
+                self.iface.messageBar().pushMessage(
+                    _tr("Fehler"), _tr("CN1-Export fehlgeschlagen: {e}").format(e=e),
+                    level=Qgis.Critical, duration=6
+                )
+                return
+            if not res.get("ok"):
+                self.iface.messageBar().pushMessage(
+                    _tr("Hinweis"), _tr("Für die Auswahl gab es keine exportierbaren Daten."),
+                    level=Qgis.Info, duration=5
+                )
+                return
+            notes = []
+            if res.get("multi_fields"):
+                notes.append(_tr("Nur eine Feldgrenze pro Feld – exportiert wurde jeweils die größte bei: {fields}").format(
+                    fields=", ".join(res["multi_fields"])))
+            if res.get("holes"):
+                notes.append(_tr("{n} Loch/Löcher als unbefahrbare Hindernisse geschrieben.").format(n=res["holes"]))
+            if res.get("renamed"):
+                notes.append(_tr("{n} Name(n) auf 18 Zeichen gekürzt bzw. angepasst.").format(n=len(res["renamed"])))
+            msg = _tr("CN1-Export erstellt: {path}").format(path=res["path"])
+            if notes:
+                msg += " – " + " ".join(notes)
+            self.iface.messageBar().pushMessage(
+                _tr("Erfolgreich"), msg,
+                level=Qgis.Warning if res.get("multi_fields") else Qgis.Success,
+                duration=10 if notes else 5
+            )
+            self.dlg.accept()
+            return
 
         if is_aggps:
             try:

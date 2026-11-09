@@ -164,10 +164,12 @@ TRANSLATIONS = {
         "Import-Optionen": "Import options",
         "Datei…": "File…",
         "Ordner…": "Folder…",
-        "TASKDATA.XML oder MasterData.xml wählen": "Select TASKDATA.XML or MasterData.xml",
-        "XML (*.xml);;Alle Dateien (*)": "XML (*.xml);;All files (*)",
-        "Ordner wählen (Gen4 / AgGPS / ISOXML)": "Select folder (Gen4 / AgGPS / ISOXML)",
-        "TASKDATA.XML, Gen4- oder AgGPS-Ordner:": "TASKDATA.XML, Gen4 or AgGPS folder:",
+        "TASKDATA.XML, MasterData.xml, index.vy1 oder CN1-ZIP wählen":
+            "Select TASKDATA.XML, MasterData.xml, index.vy1 or CN1 ZIP",
+        "ISOXML / Gen4 / CN1 (*.xml *.vy1 *.zip);;Alle Dateien (*)":
+            "ISOXML / Gen4 / CN1 (*.xml *.vy1 *.zip);;All files (*)",
+        "Ordner wählen (Gen4 / AgGPS / ISOXML / CN1)": "Select folder (Gen4 / AgGPS / ISOXML / CN1)",
+        "TASKDATA.XML, Gen4-, AgGPS- oder CN1-Ordner:": "TASKDATA.XML, Gen4, AgGPS or CN1 folder:",
         "Ausgabe-Ordner (optional)": "Output folder (optional)",
         "Ausgabe Ordner (GPKG, optional):": "Output folder (GPKG, optional):",
         "Koordinatensystem für GPKG (Import)": "Coordinate system for GPKG (import)",
@@ -285,6 +287,19 @@ TRANSLATIONS = {
             "A {format} export already exists in the target folder:\n{path}\n\nOverwrite?",
         "Erfolgreich": "Success",
         "AgGPS-Export erstellt: {path}": "AgGPS export created: {path}",
+        "CN1-Export erstellt: {path}": "CN1 export created: {path}",
+        "CN1-Export fehlgeschlagen: {e}": "CN1 export failed: {e}",
+        "CN1-Import fehlgeschlagen: {e}": "CN1 import failed: {e}",
+        "CN1-Daten wurden importiert.": "CN1 data has been imported.",
+        "Keine Felder in den CN1-Daten gefunden.": "No fields found in the CN1 data.",
+        "Die ZIP-Datei enthält keine CN1-Daten.": "The ZIP file does not contain CN1 data.",
+        "Es wird nur eine Feldgrenze pro Feld unterstützt": "Only one boundary per field is supported",
+        "Nur eine Feldgrenze pro Feld – exportiert wurde jeweils die größte bei: {fields}":
+            "Only one boundary per field \u2013 the largest one was exported for: {fields}",
+        "{n} Loch/Löcher als unbefahrbare Hindernisse geschrieben.":
+            "{n} hole(s) written as impassable obstacles.",
+        "{n} Name(n) auf 18 Zeichen gekürzt bzw. angepasst.":
+            "{n} name(s) shortened to 18 characters or adjusted.",
         "Für die Auswahl gab es keine exportierbaren Daten.":
             "There was no exportable data for the selection.",
         "AgGPS-Export fehlgeschlagen: {e}": "AgGPS export failed: {e}",
