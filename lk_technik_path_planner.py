@@ -206,7 +206,7 @@ TERMINALS = [
 ]
 
 # Standard-Terminal (Vorauswahl)
-DEFAULT_TERMINAL = ("Fendt", "One", "4.2")
+DEFAULT_TERMINAL = ("ISOXML", "v4", "4.2")
 
 
 def _format_label(fmt: str) -> str:
@@ -1053,7 +1053,9 @@ class ToolboxDialog(QDialog):
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels([_tr("Kunde / Betrieb / Feld")])
         self.tree.setColumnCount(1)
-        self.tree.setSelectionMode(QTreeWidget.NoSelection)
+        # Mehrfachauswahl (Strg/Umschalt) nur zum gleichzeitigen Löschen von Feldern;
+        # die Export-Auswahl läuft weiter über die Checkboxen.
+        self.tree.setSelectionMode(QTreeWidget.ExtendedSelection)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.itemChanged.connect(self._on_tree_item_changed)
         v.addWidget(self._mk_text(QLabel(), "Wähle, was exportiert werden soll:"))
@@ -2461,16 +2463,47 @@ class LkTechnikPathPlanner:
         )
 
     def _on_tree_context_menu(self, pos):
-        """Rechtsklick auf ein Feld im Export-Baum -> Umbenennen / Löschen."""
+        """
+        Rechtsklick auf ein Feld im Export-Baum -> Umbenennen / Löschen.
+        Sind mehrere Felder markiert, gibt es nur "Felder löschen".
+        """
         tree = self.dlg.tree
         item = tree.itemAt(pos)
         if item is None:
             return
+
+        def _is_field_leaf(it):
+            # nur Feld-Blätter haben eine ID und liegen unter Betrieb unter Kunde
+            p = it.parent()
+            return it.data(0, Qt.UserRole) is not None and p is not None and p.parent() is not None
+
+        if not _is_field_leaf(item):
+            return
+        # Rechtsklick auf ein nicht markiertes Feld -> nur dieses markieren
+        if not item.isSelected():
+            tree.clearSelection()
+            item.setSelected(True)
+
+        selected = [it for it in tree.selectedItems() if _is_field_leaf(it)]
+        if len(selected) > 1:
+            menu = QMenu()
+            act_delete_many = menu.addAction(_tr("Felder löschen…"))
+            if menu.exec_(tree.viewport().mapToGlobal(pos)) == act_delete_many:
+                try:
+                    self._delete_fields([
+                        (it.parent().parent().text(0), it.parent().text(0),
+                         int(it.data(0, Qt.UserRole)), it.text(0))
+                        for it in selected
+                    ])
+                except Exception as e:
+                    self.iface.messageBar().pushMessage(
+                        _tr("Fehler"), _tr("Löschen fehlgeschlagen: {e}").format(e=e),
+                        level=Qgis.Critical, duration=6
+                    )
+            return
+
         fid = item.data(0, Qt.UserRole)
         parent = item.parent()
-        # nur Feld-Blätter haben eine ID und liegen unter Betrieb unter Kunde
-        if fid is None or parent is None or parent.parent() is None:
-            return
         frm_name = parent.text(0)
         ctr_name = parent.parent().text(0)
 
@@ -2494,96 +2527,130 @@ class LkTechnikPathPlanner:
                 )
 
     def _delete_field(self, ctr_name: str, frm_name: str, field_id: int, current_name: str):
-        """
-        Löscht ein komplettes Feld: alle Objekte mit dieser ID aus Feldgrenzen,
-        Fahrspuren, Punkthindernis und Flaechenhindernis sowie den Eintrag in
-        Felder.csv. Mit Sicherheitsabfrage.
-        """
-        # Betriebsgruppe finden
-        root = QgsProject.instance().layerTreeRoot()
-        frm_group = None
-        for ctr in root.children():
-            if isinstance(ctr, QgsLayerTreeGroup) and ctr.name() == ctr_name:
-                for frm in ctr.children():
-                    if isinstance(frm, QgsLayerTreeGroup) and frm.name() == frm_name:
-                        frm_group = frm
-                        break
-                break
-        if frm_group is None:
-            return
+        """Löscht ein einzelnes Feld (siehe _delete_fields)."""
+        self._delete_fields([(ctr_name, frm_name, field_id, current_name)])
 
+    def _delete_fields(self, entries):
+        """
+        Löscht komplette Felder: alle Objekte mit der jeweiligen ID aus
+        Feldgrenzen, Fahrspuren, Punkthindernis und Flaechenhindernis sowie
+        den Eintrag in Felder.csv. Mit EINER Sicherheitsabfrage für alle.
+
+        entries: Liste von (Kunde, Betrieb, Feld-ID, aktueller Name)
+        """
         layer_names = ("Feldgrenzen", "Fahrspuren", "Punkthindernis", "Flaechenhindernis")
+        root = QgsProject.instance().layerTreeRoot()
 
-        # Felder.csv-Pfad ermitteln
-        csv_path = ""
-        for nm in layer_names:
-            lyr = _find_child_layer(frm_group, nm)
-            p = _felder_csv_path_for_layer(lyr) if lyr else ""
-            if p:
-                csv_path = p
-                break
-        if not csv_path:
-            QMessageBox.warning(
-                self.iface.mainWindow(),
-                _tr("Nicht möglich"),
-                _tr("Die Layer dieses Betriebs sind noch temporär (nicht gespeichert).")
-            )
+        # Je Feld: Betriebsgruppe, Felder.csv-Pfad, betroffene Objekte
+        plan = []   # dicts: frm_group, csv_path, field_id, label, counts, fids_by_layer
+        for ctr_name, frm_name, field_id, current_name in entries:
+            # Betriebsgruppe finden
+            frm_group = None
+            for ctr in root.children():
+                if isinstance(ctr, QgsLayerTreeGroup) and ctr.name() == ctr_name:
+                    for frm in ctr.children():
+                        if isinstance(frm, QgsLayerTreeGroup) and frm.name() == frm_name:
+                            frm_group = frm
+                            break
+                    break
+            if frm_group is None:
+                continue
+
+            # Felder.csv-Pfad ermitteln
+            csv_path = ""
+            for nm in layer_names:
+                lyr = _find_child_layer(frm_group, nm)
+                p = _felder_csv_path_for_layer(lyr) if lyr else ""
+                if p:
+                    csv_path = p
+                    break
+            if not csv_path:
+                QMessageBox.warning(
+                    self.iface.mainWindow(),
+                    _tr("Nicht möglich"),
+                    _tr("Die Layer dieses Betriebs sind noch temporär (nicht gespeichert).")
+                )
+                return
+
+            # Ebenen im Bearbeitungsmodus blockieren das Löschen über den Provider
+            editing = [nm for nm in layer_names
+                       if (_find_child_layer(frm_group, nm) is not None
+                           and _find_child_layer(frm_group, nm).isEditable())]
+            if editing:
+                QMessageBox.warning(
+                    self.iface.mainWindow(),
+                    _tr("Bearbeitung aktiv"),
+                    _tr("Bitte zuerst den Bearbeitungsmodus schließen für: {names}.").format(
+                        names=", ".join(_display_layer_name(nm) for nm in editing))
+                )
+                return
+
+            # Wie viele Objekte sind betroffen? (für die Abfrage)
+            counts = {}
+            fids_by_layer = {}
+            for nm in layer_names:
+                lyr = _find_child_layer(frm_group, nm)
+                if lyr is None:
+                    continue
+                idf = _pick_field(_field_map(lyr), "ID")
+                if not idf:
+                    continue
+                fids = []
+                for f in lyr.getFeatures():
+                    v = f[idf]
+                    if _is_nullish(v):
+                        continue
+                    try:
+                        if int(v) == int(field_id):
+                            fids.append(f.id())
+                    except Exception:  # nosec B112
+                        continue
+                if fids:
+                    counts[nm] = len(fids)
+                    fids_by_layer[nm] = fids
+
+            plan.append({
+                "frm_group": frm_group,
+                "csv_path": csv_path,
+                "field_id": int(field_id),
+                "label": current_name or _tr("Feld {field_id}").format(field_id=field_id),
+                "counts": counts,
+                "fids_by_layer": fids_by_layer,
+            })
+
+        if not plan:
             return
 
-        # Ebenen im Bearbeitungsmodus blockieren das Löschen über den Provider
-        editing = [nm for nm in layer_names
-                   if (_find_child_layer(frm_group, nm) is not None
-                       and _find_child_layer(frm_group, nm).isEditable())]
-        if editing:
-            QMessageBox.warning(
-                self.iface.mainWindow(),
-                _tr("Bearbeitung aktiv"),
-                _tr("Bitte zuerst den Bearbeitungsmodus schließen für: {names}.").format(
-                    names=", ".join(_display_layer_name(nm) for nm in editing))
-            )
-            return
-
-        # Wie viele Objekte sind betroffen? (für die Abfrage)
-        counts = {}
-        fids_by_layer = {}
-        for nm in layer_names:
-            lyr = _find_child_layer(frm_group, nm)
-            if lyr is None:
-                continue
-            idf = _pick_field(_field_map(lyr), "ID")
-            if not idf:
-                continue
-            fids = []
-            for f in lyr.getFeatures():
-                v = f[idf]
-                if _is_nullish(v):
-                    continue
-                try:
-                    if int(v) == int(field_id):
-                        fids.append(f.id())
-                except Exception:  # nosec B112
-                    continue
-            if fids:
-                counts[nm] = len(fids)
-                fids_by_layer[nm] = fids
-
-        label = current_name or _tr("Feld {field_id}").format(field_id=field_id)
-        detail = "\n".join(
-            _tr("  • {name}: {count} Objekt(e)").format(name=_display_layer_name(nm), count=counts[nm])
-            for nm in layer_names if nm in counts)
-        if not detail:
-            detail = _tr("  • (keine Geometrien – nur Katalogeintrag)")
+        def _detail(counts):
+            d = "\n".join(
+                _tr("  • {name}: {count} Objekt(e)").format(name=_display_layer_name(nm), count=counts[nm])
+                for nm in layer_names if nm in counts)
+            return d or _tr("  • (keine Geometrien – nur Katalogeintrag)")
 
         msg = QMessageBox(self.iface.mainWindow())
         msg.setIcon(QMessageBox.Warning)
-        msg.setWindowTitle(_tr("Feld löschen"))
-        msg.setText(_tr("Sind Sie sicher, dass Sie das Feld „{label}“ (ID {field_id}) löschen möchten?").format(
-            label=label, field_id=field_id))
-        msg.setInformativeText(
-            _tr("Damit werden ALLE Daten dieses Feldes unwiderruflich gelöscht – "
-                "Feldgrenze(n), Fahrspuren, Hindernisse und der Katalogeintrag:\n\n")
-            + detail
-        )
+        if len(plan) == 1:
+            p0 = plan[0]
+            msg.setWindowTitle(_tr("Feld löschen"))
+            msg.setText(_tr("Sind Sie sicher, dass Sie das Feld „{label}“ (ID {field_id}) löschen möchten?").format(
+                label=p0["label"], field_id=p0["field_id"]))
+            msg.setInformativeText(
+                _tr("Damit werden ALLE Daten dieses Feldes unwiderruflich gelöscht – "
+                    "Feldgrenze(n), Fahrspuren, Hindernisse und der Katalogeintrag:\n\n")
+                + _detail(p0["counts"])
+            )
+        else:
+            msg.setWindowTitle(_tr("Felder löschen"))
+            msg.setText(_tr("Sind Sie sicher, dass Sie diese {n} Felder löschen möchten?").format(n=len(plan)))
+            blocks = []
+            for p in plan:
+                blocks.append(_tr("„{label}“ (ID {field_id}):").format(
+                    label=p["label"], field_id=p["field_id"]) + "\n" + _detail(p["counts"]))
+            msg.setInformativeText(
+                _tr("Damit werden ALLE Daten dieser Felder unwiderruflich gelöscht – "
+                    "Feldgrenze(n), Fahrspuren, Hindernisse und die Katalogeinträge:\n\n")
+                + "\n\n".join(blocks)
+            )
         msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         msg.setDefaultButton(QMessageBox.No)
         msg.button(QMessageBox.Yes).setText(_tr("Ja, löschen"))
@@ -2594,40 +2661,51 @@ class LkTechnikPathPlanner:
         # Objekte aus allen Ebenen entfernen
         self._felder_guard = True
         try:
-            for nm, fids in fids_by_layer.items():
-                lyr = _find_child_layer(frm_group, nm)
-                if lyr is None or not fids:
-                    continue
-                try:
-                    lyr.dataProvider().deleteFeatures(fids)
-                    lyr.reload()
-                    lyr.updateExtents()
-                    lyr.triggerRepaint()
-                except Exception:  # nosec B110
-                    pass
+            for p in plan:
+                for nm, fids in p["fids_by_layer"].items():
+                    lyr = _find_child_layer(p["frm_group"], nm)
+                    if lyr is None or not fids:
+                        continue
+                    try:
+                        lyr.dataProvider().deleteFeatures(fids)
+                        lyr.reload()
+                        lyr.updateExtents()
+                        lyr.triggerRepaint()
+                    except Exception:  # nosec B110
+                        pass
         finally:
             self._felder_guard = False
 
-        # Katalogeintrag entfernen
-        rows = _read_felder_csv(csv_path)
-        if field_id in rows:
-            rows.pop(field_id, None)
-            _write_felder_csv(csv_path, rows)
+        # Katalogeinträge entfernen (je Felder.csv einmal lesen/schreiben)
+        by_csv = {}
+        for p in plan:
+            by_csv.setdefault(p["csv_path"], []).append(p)
+        for csv_path, plist in by_csv.items():
+            rows = _read_felder_csv(csv_path)
+            changed = False
+            for p in plist:
+                if p["field_id"] in rows:
+                    rows.pop(p["field_id"], None)
+                    changed = True
+            if changed:
+                _write_felder_csv(csv_path, rows)
 
-        ref_layer = None
-        for nm in layer_names:
-            ref_layer = _find_child_layer(frm_group, nm)
+            ref_layer = None
+            for nm in layer_names:
+                ref_layer = _find_child_layer(plist[0]["frm_group"], nm)
+                if ref_layer is not None:
+                    break
             if ref_layer is not None:
-                break
-        if ref_layer is not None:
-            self._reload_felder_for_feldgrenzen(ref_layer, csv_path)
-            self._apply_language_to_project()
+                self._reload_felder_for_feldgrenzen(ref_layer, csv_path)
 
+        self._apply_language_to_project()
         self.dlg.refresh_tree()
-        self.iface.messageBar().pushMessage(
-            _tr("OK"), _tr("Feld „{label}“ (ID {field_id}) wurde gelöscht.").format(
-                label=label, field_id=field_id), level=Qgis.Success, duration=5
-        )
+        if len(plan) == 1:
+            text = _tr("Feld „{label}“ (ID {field_id}) wurde gelöscht.").format(
+                label=plan[0]["label"], field_id=plan[0]["field_id"])
+        else:
+            text = _tr("{n} Felder wurden gelöscht.").format(n=len(plan))
+        self.iface.messageBar().pushMessage(_tr("OK"), text, level=Qgis.Success, duration=5)
 
     def _rename_field(self, ctr_name: str, frm_name: str, field_id: int, current_name: str):
         """

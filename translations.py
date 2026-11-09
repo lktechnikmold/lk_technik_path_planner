@@ -221,6 +221,16 @@ TRANSLATIONS = {
         # --- Meldungen: Feld umbenennen/loeschen ---
         "Feld umbenennen…": "Rename field…",
         "Feld löschen…": "Delete field…",
+        "Felder löschen…": "Delete fields…",
+        "Felder löschen": "Delete fields",
+        "Sind Sie sicher, dass Sie diese {n} Felder löschen möchten?":
+            "Are you sure you want to delete these {n} fields?",
+        "„{label}“ (ID {field_id}):": "„{label}“ (ID {field_id}):",
+        "Damit werden ALLE Daten dieser Felder unwiderruflich gelöscht – "
+        "Feldgrenze(n), Fahrspuren, Hindernisse und die Katalogeinträge:\n\n":
+            "This permanently deletes ALL data of these fields – "
+            "boundary/boundaries, swaths, obstacles and the catalog entries:\n\n",
+        "{n} Felder wurden gelöscht.": "{n} fields have been deleted.",
         "Umbenennen fehlgeschlagen: {e}": "Rename failed: {e}",
         "Löschen fehlgeschlagen: {e}": "Delete failed: {e}",
         "Die Layer dieses Betriebs sind noch temporär (nicht gespeichert).":
