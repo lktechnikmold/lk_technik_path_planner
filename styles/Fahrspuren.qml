@@ -540,7 +540,7 @@
     <constraint exp="" desc="" field="fid"/>
     <constraint exp="" desc="" field="ID"/>
     <constraint exp="length( &quot;Name&quot; ) &lt;= 32" desc="Name darf höchstens 32 Zeichen lang sein" field="Name"/>
-    <constraint exp="length( &quot;Segment&quot; ) &lt;= 32" desc="Segment darf höchstens 32 Zeichen lang sein" field="Segment"/>
+    <constraint exp="&quot;Segment&quot; IS NULL OR length( &quot;Segment&quot; ) &lt;= 32" desc="Segment darf höchstens 32 Zeichen lang sein" field="Segment"/>
   </constraintExpressions>
   <expressionfields/>
   <attributeactions>
