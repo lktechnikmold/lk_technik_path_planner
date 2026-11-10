@@ -15,13 +15,14 @@ Fahrspurplanung"):
     4. Abschnitte unter 15 m (z. B. Eckstücke) werden weggelassen.
     5. Bei Abstand > 0 jede Spur parallel um diesen Abstand nach innen
        verschieben (Länge bleibt wie an der Feldgrenze).
-Mehrere Feldgrenzen eines Felds werden vorher vereinigt, damit an
-gemeinsamen Kanten keine Spuren im Feldinneren entstehen.
+Mehrere Feldgrenzen eines Felds werden für die Außengrenze vereinigt. Wo zwei
+Feldgrenzen aneinander liegen, entsteht zusätzlich eine Spur entlang der
+gemeinsamen Grenze (bei Abstand > 0 je eine Spur in jeden Feldteil versetzt).
 """
 
 import math
 
-from qgis.core import Qgis, QgsGeometry, QgsPointXY
+from qgis.core import Qgis, QgsGeometry, QgsPointXY, QgsWkbTypes
 
 DEFAULT_ANGLE_DEG = 140.0
 COLLINEAR_DEG = 179.5
@@ -238,6 +239,103 @@ def _shift_closed(seg, distance_m):
     if (_signed_area(ring) > 0) != (_signed_area(seg[:-1]) > 0):
         ring = [ring[0]] + list(reversed(ring[1:]))
     return [QgsPointXY(p) for p in ring] + [QgsPointXY(ring[0])]
+
+
+def line_to_segments(line, threshold=DEFAULT_ANGLE_DEG):
+    """
+    Wie ring_to_segments, aber für eine offene Linie (z. B. die gemeinsame
+    Grenze zweier Feldteile): geteilt wird an inneren Knicken <= threshold.
+    """
+    clean = []
+    for p in (QgsPointXY(q) for q in line):
+        if not clean or p != clean[-1]:
+            clean.append(p)
+    changed = True
+    while changed and len(clean) > 2:
+        changed = False
+        for i in range(1, len(clean) - 1):
+            ang = _angle_at(clean[i - 1], clean[i], clean[i + 1])
+            if ang is not None and ang >= COLLINEAR_DEG:
+                del clean[i]
+                changed = True
+                break
+    if len(clean) < 2:
+        return []
+    segments = []
+    seg = [clean[0]]
+    for i in range(1, len(clean)):
+        seg.append(clean[i])
+        if i < len(clean) - 1:
+            ang = _angle_at(clean[i - 1], clean[i], clean[i + 1])
+            if ang is not None and ang <= threshold:
+                segments.append(seg)
+                seg = [clean[i]]
+    segments.append(seg)
+    return [s for s in segments if len(s) >= 2]
+
+
+# Toleranz, ab der zwei Feldgrenzen als "aneinander liegend" gelten (m)
+SHARED_TOL_M = 0.1
+
+
+def _single_polygons(geoms):
+    out = []
+    for g in geoms:
+        if g is None or g.isEmpty():
+            continue
+        for poly in (g.asMultiPolygon() if g.isMultipart() else [g.asPolygon()]):
+            if poly and len(poly[0]) >= 4:
+                out.append(poly)
+    return out
+
+
+def _shared_borders(geoms):
+    """Linien, an denen zwei Feldgrenzen eines Felds aneinander liegen."""
+    polys = _single_polygons(geoms)
+    cap, join = _styles()
+    lines = []
+    for i in range(len(polys)):
+        ring_a = QgsGeometry.fromPolylineXY(polys[i][0])
+        for j in range(i + 1, len(polys)):
+            near_b = QgsGeometry.fromPolygonXY(polys[j]).buffer(SHARED_TOL_M, 8, cap, join, 5.0)
+            if not ring_a.boundingBox().intersects(near_b.boundingBox()):
+                continue
+            inter = ring_a.intersection(near_b)
+            if inter is None or inter.isEmpty() or QgsWkbTypes.geometryType(inter.wkbType()) != QgsWkbTypes.LineGeometry:
+                continue
+            merged = inter.mergeLines()
+            parts = merged.asMultiPolyline() if merged.isMultipart() else [merged.asPolyline()]
+            lines.extend(pl for pl in parts if len(pl) >= 2)
+    return lines
+
+
+def tracks_for_boundaries(geoms_metric, offset_m=0.0, threshold=DEFAULT_ANGLE_DEG):
+    """
+    Spuren für ein Feld mit einer oder mehreren Feldgrenzen (metrisches KBS):
+    Spuren entlang der gemeinsamen Außengrenze und zusätzlich entlang der
+    Grenzen, an denen zwei Feldgrenzen aneinander liegen. Diese werden bei
+    Abstand > 0 auf beide Seiten versetzt (je eine Spur pro Feldteil).
+    """
+    geoms = [g for g in geoms_metric if g is not None and not g.isEmpty()]
+    if not geoms:
+        return []
+    merged = QgsGeometry.unaryUnion(geoms) if len(geoms) > 1 else geoms[0]
+    result = tracks_for_boundary(merged, offset_m, threshold)
+    if not result or (len(geoms) < 2 and not geoms[0].isMultipart()):
+        return result
+    offset = float(offset_m or 0.0)
+    for line in _shared_borders(geoms):
+        for seg in line_to_segments(line, threshold):
+            if QgsGeometry.fromPolylineXY(seg).length() < MIN_TRACK_M:
+                continue
+            if offset > 0:
+                for left in (True, False):
+                    shifted = _shift_segment(seg, offset, left)
+                    if len(shifted) >= 2:
+                        result.append(shifted)
+            else:
+                result.append(seg)
+    return result
 
 
 def tracks_for_boundary(geom_metric, offset_m=0.0, threshold=DEFAULT_ANGLE_DEG):

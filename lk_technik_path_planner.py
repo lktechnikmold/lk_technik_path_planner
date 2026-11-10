@@ -102,9 +102,9 @@ except Exception:
     from cn1_format import find_cn1_root, existing_cn1_dirs, extract_cn1_zip
 
 try:
-    from .track_creation import tracks_for_boundary
+    from .track_creation import tracks_for_boundaries
 except Exception:
-    from track_creation import tracks_for_boundary
+    from track_creation import tracks_for_boundaries
 
 try:
     from . import translations
@@ -205,6 +205,7 @@ TERMINALS = [
     ("New Holland", "FM 750", "AgGPS"),
     ("New Holland", "FM 1000", "AgGPS"),
     ("New Holland", "Intelli View 4", "CN1"),
+    ("New Holland", "Intelli View 12", "4.2"),
     ("Raven", "CR7", "4.2"),
     ("Raven", "CR12", "4.2"),
     ("Raven", "Viper 4", "4.2"),
@@ -2309,15 +2310,14 @@ class LkTechnikPathPlanner:
                     if not geoms:
                         no_boundary.append(f"{ctr_name} / {frm_name} / {label}")
                         continue
-                    # Mehrere Feldgrenzen eines Felds vereinigen - sonst entstünden
-                    # an gemeinsamen Kanten Spuren mitten im Feld.
+                    # Mehrere Feldgrenzen eines Felds: Spuren entlang der gemeinsamen
+                    # Außengrenze plus entlang der Grenzen, an denen sie aneinander liegen.
                     metric_geoms = []
                     for g in geoms:
                         gm = QgsGeometry(g)
                         gm.transform(to_metric)
                         metric_geoms.append(gm)
-                    merged = QgsGeometry.unaryUnion(metric_geoms) if len(metric_geoms) > 1 else metric_geoms[0]
-                    segments = tracks_for_boundary(merged, offset_m)
+                    segments = tracks_for_boundaries(metric_geoms, offset_m)
                     if not segments:
                         too_small.append(f"{ctr_name} / {frm_name} / {label}")
                         continue
