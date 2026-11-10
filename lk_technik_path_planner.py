@@ -1410,6 +1410,24 @@ class LkTechnikPathPlanner:
         style_path = os.path.join(plugin_dir, "styles", filename)
         return style_path if os.path.exists(style_path) else ""
 
+    def _ensure_area_name_field(self, layer: QgsVectorLayer):
+        """
+        Flächenhindernis-Layer aus älteren Versionen haben noch kein Feld
+        "Name" - es wird ergänzt, damit auch dort Namen eingegeben werden können.
+        """
+        try:
+            if translations.canonical_layer_name(layer.name()) != "Flaechenhindernis":
+                return
+            if _pick_field(_field_map(layer), "Name") or layer.isEditable():
+                return
+            dp = layer.dataProvider()
+            if not (dp.capabilities() & dp.AddAttributes):
+                return
+            if dp.addAttributes([QgsField("Name", QVariant.String)]):
+                layer.updateFields()
+        except Exception:  # nosec B110
+            pass
+
     def _apply_predefined_style(self, layer: QgsVectorLayer):
         """
         Wendet den vordefinierten Style anhand des exakten Layernamens an.
@@ -2198,6 +2216,7 @@ class LkTechnikPathPlanner:
             if not isinstance(lyr, QgsVectorLayer):
                 continue
 
+            self._ensure_area_name_field(lyr)
             self._apply_predefined_style(lyr)
             self._apply_language_to_layer(node, lyr)
 
@@ -2563,6 +2582,7 @@ class LkTechnikPathPlanner:
             dp = mem.dataProvider()
             dp.addAttributes([
                 QgsField("ID", QVariant.Int),
+                QgsField("Name", QVariant.String),
                 QgsField("befahrbar", QVariant.Int),
             ])
             mem.updateFields()
@@ -3373,7 +3393,7 @@ class LkTechnikPathPlanner:
 
             area_layer = QgsVectorLayer(f"MultiPolygon?crs={crs_authid}", "Flaechenhindernis", "memory")
             dp_area = area_layer.dataProvider()
-            a_fields = QgsFields(); a_fields.append(QgsField("ID", QVariant.Int)); a_fields.append(QgsField("befahrbar", QVariant.Int))
+            a_fields = QgsFields(); a_fields.append(QgsField("ID", QVariant.Int)); a_fields.append(QgsField("Name", QVariant.String)); a_fields.append(QgsField("befahrbar", QVariant.Int))
             dp_area.addAttributes(a_fields); area_layer.updateFields()
 
             self._apply_predefined_style(field_layer)
@@ -3610,12 +3630,16 @@ class LkTechnikPathPlanner:
                 if hind_type not in ("6", "8"):
                     continue
                 bf_val = 1 if hind_type == "8" else 0
+                hind_b = hind_pln.get("B")
+                hind_area_name = None if _is_nullish(hind_b) or not str(hind_b).strip() else str(hind_b).strip()
 
                 def _flush_area_ring(rings):
                     if not rings or len(rings[0]) <= 2:
                         return
                     feat_a = QgsFeature(area_layer.fields())
                     feat_a.setAttribute("ID", numeric_id); feat_a.setAttribute("befahrbar", bf_val)
+                    if hind_area_name is not None and area_layer.fields().indexOf("Name") >= 0:
+                        feat_a.setAttribute("Name", hind_area_name)
                     feat_a.setGeometry(QgsGeometry.fromPolygonXY(rings))
                     dp_area.addFeatures([feat_a])
 
@@ -4334,9 +4358,15 @@ class LkTechnikPathPlanner:
                             # PLN mit offiziellem PolygonType: "6"=Obstacle (nicht befahrbar) bzw.
                             # "8"=Other (befahrbar, aber markierte Flaeche).
                             hind_poly_type = '6' if bf_val == 0 else '8'
+                            # optionaler Name des Hindernisses -> PLN@B (PolygonDesignator, max. 32 Zeichen)
+                            fh_name = _feat_val(fh_feature, fh_fmap, "Name", default=None)
+                            fh_name = "" if _is_nullish(fh_name) else str(fh_name).strip()[:32]
                             # je Teilpolygon eine eigene PLN (max. ein Aussenring pro PLN)
                             for hind_part in _polygon_parts(fh_feature.geometry()):
-                                hind_pln_attrs = {'A': hind_poly_type, 'C': str(0)}
+                                hind_pln_attrs = {'A': hind_poly_type}
+                                if fh_name:
+                                    hind_pln_attrs['B'] = fh_name
+                                hind_pln_attrs['C'] = str(0)
                                 if not is_v3:
                                     hind_pln_attrs['E'] = f'PLN{pln_global}'
                                     pln_global += 1

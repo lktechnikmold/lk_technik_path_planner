@@ -640,6 +640,7 @@ def export_john_deere_gen4(
 
                 area_id_field = _pick_field(area_fmap, "ID")
                 area_befahrbar_field = _pick_field(area_fmap, "befahrbar")
+                area_name_field = _pick_field(area_fmap, "Name")
 
                 for area_feature in area_layer.getFeatures():
                     if area_id_field is None:
@@ -668,6 +669,12 @@ def export_john_deere_gen4(
                     else:
                         category_guid = flag_category_guid_nicht_befahrbar
                         flag_name = "nicht befahrbares Hindernis"
+
+                    # eingegebener Name des Hindernisses -> Flag@Name
+                    if area_name_field:
+                        area_name = area_feature[area_name_field]
+                        if area_name is not None and str(area_name).strip() and str(area_name) != "NULL":
+                            flag_name = str(area_name).strip()
 
                     area_geom = _polygon_feature_to_geojson_geometry(area_feature, ct_area)
                     if area_geom is None:

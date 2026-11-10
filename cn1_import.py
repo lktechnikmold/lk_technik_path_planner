@@ -181,7 +181,8 @@ def import_cn1(plugin, path, out_dir=None):
         ]); pl.updateFields()
         al = QgsVectorLayer(f"MultiPolygon?crs={crs_authid}", "Flaechenhindernis", "memory")
         al.dataProvider().addAttributes([
-            QgsField("ID", QVariant.Int), QgsField("befahrbar", QVariant.Int),
+            QgsField("ID", QVariant.Int), QgsField("Name", QVariant.String),
+            QgsField("befahrbar", QVariant.Int),
         ]); al.updateFields()
         return {"Feldgrenzen": fl, "Fahrspuren": ll, "Punkthindernis": pl, "Flaechenhindernis": al}
 

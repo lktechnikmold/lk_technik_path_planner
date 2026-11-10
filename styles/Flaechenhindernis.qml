@@ -447,36 +447,49 @@
         </config>
       </editWidget>
     </field>
+    <field configurationFlags="NoFlag" name="Name">
+      <editWidget type="TextEdit">
+        <config>
+          <Option/>
+        </config>
+      </editWidget>
+    </field>
   </fieldConfiguration>
   <aliases>
     <alias field="fid" index="0" name=""/>
     <alias field="ID" index="1" name="Feld"/>
     <alias field="befahrbar" index="2" name=""/>
+    <alias field="Name" index="3" name=""/>
   </aliases>
   <splitPolicies>
     <policy field="fid" policy="Duplicate"/>
     <policy field="ID" policy="Duplicate"/>
     <policy field="befahrbar" policy="Duplicate"/>
+    <policy field="Name" policy="Duplicate"/>
   </splitPolicies>
   <duplicatePolicies>
     <policy field="fid" policy="Duplicate"/>
     <policy field="ID" policy="Duplicate"/>
     <policy field="befahrbar" policy="Duplicate"/>
+    <policy field="Name" policy="Duplicate"/>
   </duplicatePolicies>
   <defaults>
     <default applyOnUpdate="1" field="fid" expression="@id"/>
     <default applyOnUpdate="0" field="ID" expression=""/>
     <default applyOnUpdate="0" field="befahrbar" expression=""/>
+    <default applyOnUpdate="0" field="Name" expression=""/>
   </defaults>
   <constraints>
     <constraint unique_strength="1" exp_strength="0" notnull_strength="1" field="fid" constraints="3"/>
     <constraint unique_strength="0" exp_strength="0" notnull_strength="0" field="ID" constraints="0"/>
     <constraint unique_strength="0" exp_strength="0" notnull_strength="0" field="befahrbar" constraints="0"/>
+    <constraint unique_strength="0" exp_strength="1" notnull_strength="0" field="Name" constraints="4"/>
   </constraints>
   <constraintExpressions>
     <constraint exp="" desc="" field="fid"/>
     <constraint exp="" desc="" field="ID"/>
     <constraint exp="" desc="" field="befahrbar"/>
+    <constraint exp="&quot;Name&quot; IS NULL OR length( &quot;Name&quot; ) &lt;= 32" desc="Name darf höchstens 32 Zeichen lang sein" field="Name"/>
   </constraintExpressions>
   <expressionfields/>
   <attributeactions>
@@ -487,6 +500,7 @@
       <column type="field" hidden="1" name="fid" width="303"/>
       <column type="field" hidden="0" name="ID" width="-1"/>
       <column type="field" hidden="0" name="befahrbar" width="-1"/>
+      <column type="field" hidden="0" name="Name" width="-1"/>
       <column type="actions" hidden="1" width="-1"/>
     </columns>
   </attributetableconfig>
@@ -519,16 +533,19 @@ def my_form_open(dialog, layer, feature):
   <editable>
     <field editable="1" name="ID"/>
     <field editable="1" name="befahrbar"/>
+    <field editable="1" name="Name"/>
     <field editable="0" name="fid"/>
   </editable>
   <labelOnTop>
     <field labelOnTop="0" name="ID"/>
     <field labelOnTop="0" name="befahrbar"/>
+    <field labelOnTop="0" name="Name"/>
     <field labelOnTop="0" name="fid"/>
   </labelOnTop>
   <reuseLastValue>
     <field reuseLastValue="0" name="ID"/>
     <field reuseLastValue="0" name="befahrbar"/>
+    <field reuseLastValue="0" name="Name"/>
     <field reuseLastValue="0" name="fid"/>
   </reuseLastValue>
   <dataDefinedFieldProperties/>

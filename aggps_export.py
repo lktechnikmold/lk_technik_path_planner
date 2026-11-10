@@ -189,7 +189,7 @@ def export_aggps(
             b_by_id, _, b_name = _bucket(poly)
             s_by_id, _, s_name = _bucket(line)
             p_by_id, _, _ = _bucket(pt)
-            a_by_id, _, _ = _bucket(ar)
+            a_by_id, _, a_name = _bucket(ar)
 
             ct_poly = _ct_for(poly)
             ct_line = _ct_for(line)
@@ -249,7 +249,8 @@ def export_aggps(
                 for f in a_by_id.get(fid, []):
                     g = _geom_wgs(f.geometry(), ct_ar, to_multi=True)
                     if g is not None:
-                        a_rows.append((g, {"id": fid, "Name": field_name}))
+                        # Name des Hindernisses, ohne Namen wie bisher der Feldname
+                        a_rows.append((g, {"id": fid, "Name": _name_of(f, a_name) or field_name}))
 
                 # PointFeature.shp (Punkthindernis)
                 p_rows = []

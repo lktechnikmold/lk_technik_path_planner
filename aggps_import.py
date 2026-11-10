@@ -179,7 +179,8 @@ def import_aggps(plugin, path, out_dir=None):
 
         al = QgsVectorLayer(f"MultiPolygon?crs={crs_authid}", "Flaechenhindernis", "memory")
         al.dataProvider().addAttributes([
-            QgsField("ID", QVariant.Int), QgsField("befahrbar", QVariant.Int),
+            QgsField("ID", QVariant.Int), QgsField("Name", QVariant.String),
+            QgsField("befahrbar", QVariant.Int),
         ]); al.updateFields()
 
         return {"Feldgrenzen": fl, "Fahrspuren": ll,
@@ -350,6 +351,7 @@ def import_aggps(plugin, path, out_dir=None):
                 # Flaechenhindernis
                 if a_lyr is not None:
                     ct = _transform_for(a_lyr)
+                    afmap = _fmap(a_lyr)
                     feats = []
                     for af in a_lyr.getFeatures():
                         g = _geom_to_target(af.geometry(), ct, make_multi=True)
@@ -358,6 +360,11 @@ def import_aggps(plugin, path, out_dir=None):
                         nf = QgsFeature(layers["Flaechenhindernis"].fields())
                         nf.setGeometry(g)
                         nf.setAttribute("ID", int(field_id))
+                        # Name des Hindernisses; steht dort nur der Feldname
+                        # (Export ohne Hindernisnamen), bleibt er leer
+                        anm = _attr(af, afmap, "Name")
+                        if anm and str(anm).strip() != field_name:
+                            nf.setAttribute("Name", str(anm).strip())
                         nf.setAttribute("befahrbar", 0)
                         feats.append(nf)
                     if feats:

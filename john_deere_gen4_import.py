@@ -191,6 +191,7 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
         dp = area_layer.dataProvider()
         dp.addAttributes([
             QgsField("ID", QVariant.Int),
+            QgsField("Name", QVariant.String),
             QgsField("befahrbar", QVariant.Int),
         ])
         area_layer.updateFields()
@@ -693,6 +694,11 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
             layer = layers["Flaechenhindernis"]
             feat = QgsFeature(layer.fields())
             feat.setAttribute("ID", int(field_info["field_id"]))
+            # Flag@Name -> Name; die Platzhalter, die der Export ohne Namen
+            # schreibt, werden nicht als Name übernommen
+            area_name = (flag.get("Name") or "").strip()
+            if area_name and area_name not in ("befahrbares Hindernis", "nicht befahrbares Hindernis"):
+                feat.setAttribute("Name", area_name)
             feat.setAttribute("befahrbar", befahrbar)
             feat.setGeometry(qgs_geom)
             layer.dataProvider().addFeatures([feat])
