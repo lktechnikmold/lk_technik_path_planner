@@ -10,8 +10,8 @@ Fahrspurplanung"):
        hintereinander, die zusammen eine Ecke ergeben) zählen ebenfalls als
        Ecke. Löcher werden nicht verwendet.
     3. Abschnitte mit 2 Stützpunkten werden Geraden (AB-Linien), ab 3
-       Stützpunkten Kurven (alle Stützpunkte bleiben erhalten). Punkte, die
-       praktisch auf einer Geraden liegen, zählen dabei nicht mit.
+       Stützpunkten Kurven (alle Stützpunkte bleiben erhalten). Nur Punkte,
+       die exakt (< 1 mm) auf einer Geraden liegen, zählen dabei nicht mit.
     4. Abschnitte unter 15 m (z. B. Eckstücke) werden weggelassen.
     5. Bei Abstand > 0 jede Spur parallel um diesen Abstand nach innen
        verschieben (Länge bleibt wie an der Feldgrenze).
@@ -25,7 +25,13 @@ import math
 from qgis.core import Qgis, QgsGeometry, QgsPointXY, QgsWkbTypes
 
 DEFAULT_ANGLE_DEG = 140.0
-COLLINEAR_DEG = 179.5
+# Zwischenpunkte, die weniger als 1 mm neben der Verbindungslinie ihrer
+# Nachbarn liegen, liegen exakt auf einer Linie und werden weggelassen. Alle
+# anderen bleiben erhalten - die Spur liegt damit genau auf der Feldgrenze.
+COLLINEAR_TOL_M = 0.001
+# Knicke unter diesem Wert gelten bei abgeschrägten Ecken als Digitalisier-
+# Rauschen (ihre Richtung spielt dort keine Rolle).
+NOISE_TURN_DEG = 10.0
 # Abgeschrägte Ecken: Knicke, die über Kanten < 15 m und höchstens 30 m
 # Gesamtlänge zusammen eine Ecke bilden, werden wie eine Ecke behandelt.
 CHAMFER_EDGE_M = 15.0
@@ -46,6 +52,21 @@ def _angle_at(p_prev, p_curr, p_next):
     return math.degrees(math.acos(max(-1.0, min(1.0, cosang))))
 
 
+def _off_line(p_prev, p_curr, p_next):
+    """Abstand von p_curr zur Verbindungslinie p_prev - p_next (m)."""
+    dx, dy = p_next.x() - p_prev.x(), p_next.y() - p_prev.y()
+    length = math.hypot(dx, dy)
+    if length == 0:
+        return math.hypot(p_curr.x() - p_prev.x(), p_curr.y() - p_prev.y())
+    return abs(dx * (p_curr.y() - p_prev.y()) - dy * (p_curr.x() - p_prev.x())) / length
+
+
+def _is_collinear(p_prev, p_curr, p_next):
+    """Zwischenpunkt liegt exakt (< 1 mm) zwischen seinen Nachbarn auf einer Linie."""
+    ang = _angle_at(p_prev, p_curr, p_next)
+    return ang is not None and ang > 90.0 and _off_line(p_prev, p_curr, p_next) < COLLINEAR_TOL_M
+
+
 def _turn_at(p_prev, p_curr, p_next):
     """Richtungsänderung am Punkt p_curr in Grad mit Vorzeichen (links +, rechts -)."""
     h1 = math.atan2(p_curr.y() - p_prev.y(), p_curr.x() - p_prev.x())
@@ -58,6 +79,8 @@ def _chamfer_corners(pts, splits, threshold):
     Abgeschrägte Ecken: mehrere Knicke kurz hintereinander, von denen jeder für
     sich zu flach ist (Innenwinkel > threshold), die zusammen aber eine Ecke
     <= threshold ergeben (z. B. 2 x 142° im Abstand von 8 m = Ecke von ca. 76°).
+    Ebenso ein kurzer Stummel direkt an einer Ecke (z. B. an der Spitze eines
+    schmalen Streifens), damit er nicht an der langen Spur hängen bleibt.
     Liefert die Indizes, an denen zusätzlich geteilt wird: Anfang und Ende
     jeder solchen Ecke.
     """
@@ -70,8 +93,11 @@ def _chamfer_corners(pts, splits, threshold):
     def _link(k):
         """Kante k (Punkt k -> k+1) gehört zu einer möglichen Ecke."""
         a, b = k, (k + 1) % n
-        return (edge[k] < CHAMFER_EDGE_M and a not in splits and b not in splits
-                and turns[a] != 0 and turns[a] * turns[b] > 0)
+        if edge[k] >= CHAMFER_EDGE_M:
+            return False
+        # gleiche Drehrichtung - oder einer der beiden Knicke ist nur Rauschen
+        return (turns[a] * turns[b] > 0
+                or min(abs(turns[a]), abs(turns[b])) < NOISE_TURN_DEG)
 
     links = [_link(k) for k in range(n)]
     if all(links) or not any(links):
@@ -95,9 +121,17 @@ def _chamfer_corners(pts, splits, threshold):
             b = j                                  # letzter Punkt der Folge
             idx = [(a + t) % n for t in range(((b - a) % n) + 1)]
             total = sum(turns[t] for t in idx)
-            if abs(total) >= need and length <= CHAMFER_TOTAL_M:
-                extra.add(a)
-                extra.add(b)
+            if any(t in splits for t in idx):
+                # Stummel an einer echten Ecke: nur an deutlichen Knicken
+                # (>= NOISE_TURN_DEG) teilen - ein flacher Kurvenpunkt neben
+                # der Ecke ist kein Stummel-Ende, die Kurve läuft bis zur Ecke
+                ends = [t for t in idx if abs(turns[t]) >= NOISE_TURN_DEG]
+            else:
+                # abgeschrägte/abgerundete Ecke: an Anfang und Ende teilen
+                ends = [a, b]
+            if ends and abs(total) >= need and length <= CHAMFER_TOTAL_M:
+                extra.add(ends[0])
+                extra.add(ends[-1])
         k = (k + 1) % n
     return extra
 
@@ -117,16 +151,16 @@ def ring_to_segments(ring, threshold=DEFAULT_ANGLE_DEG):
             clean.append(p)
     if len(clean) >= 2 and clean[0] == clean[-1]:
         clean.pop()
-    # Punkte, die praktisch auf einer Geraden liegen (Innenwinkel >= 179,5°),
-    # sind kein Knick und keine Krümmung - sonst würde aus einer geraden
-    # Kante mit Zwischenpunkt eine "Kurve" (ab 3 Stützpunkten).
+    # Punkte, die exakt auf einer Geraden liegen, sind kein Knick - sonst würde
+    # aus einer geraden Kante mit Zwischenpunkt eine "Kurve" (ab 3 Stützpunkten).
+    # Liegt ein Punkt auch nur knapp daneben, bleibt er erhalten (die Spur soll
+    # genau auf der Feldgrenze liegen).
     changed = True
     while changed and len(clean) > 3:
         changed = False
         for i in range(len(clean)):
             m = len(clean)
-            ang = _angle_at(clean[(i - 1) % m], clean[i], clean[(i + 1) % m])
-            if ang is not None and ang >= COLLINEAR_DEG:
+            if _is_collinear(clean[(i - 1) % m], clean[i], clean[(i + 1) % m]):
                 del clean[i]
                 changed = True
                 break
@@ -254,8 +288,7 @@ def line_to_segments(line, threshold=DEFAULT_ANGLE_DEG):
     while changed and len(clean) > 2:
         changed = False
         for i in range(1, len(clean) - 1):
-            ang = _angle_at(clean[i - 1], clean[i], clean[i + 1])
-            if ang is not None and ang >= COLLINEAR_DEG:
+            if _is_collinear(clean[i - 1], clean[i], clean[i + 1]):
                 del clean[i]
                 changed = True
                 break
