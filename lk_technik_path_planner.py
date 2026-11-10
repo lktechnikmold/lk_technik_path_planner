@@ -102,6 +102,11 @@ except Exception:
     from cn1_format import find_cn1_root, existing_cn1_dirs, extract_cn1_zip
 
 try:
+    from .track_creation import tracks_for_boundary
+except Exception:
+    from track_creation import tracks_for_boundary
+
+try:
     from . import translations
 except Exception:
     import translations
@@ -874,6 +879,7 @@ class ToolboxDialog(QDialog):
 
         self.mode_import = QRadioButton("Import")
         self.mode_export = QRadioButton("Export")
+        self.mode_tracks = self._mk_text(QRadioButton(), "Spurenerstellung")
         self.mode_export.setChecked(True)
 
         # Sprach-Dropdown (oben rechts)
@@ -892,17 +898,21 @@ class ToolboxDialog(QDialog):
         top_row = QHBoxLayout()
         top_row.addWidget(self.mode_export)
         top_row.addWidget(self.mode_import)
+        top_row.addWidget(self.mode_tracks)
         top_row.addStretch(1)
         top_row.addLayout(right_col)
 
         self.stack = QStackedWidget()
         self.page_export = self._build_export_page()
         self.page_import = self._build_import_page()
+        self.page_tracks = self._build_tracks_page()
         self.stack.addWidget(self.page_export)
         self.stack.addWidget(self.page_import)
+        self.stack.addWidget(self.page_tracks)
 
         self.mode_export.toggled.connect(self._sync_mode)
         self.mode_import.toggled.connect(self._sync_mode)
+        self.mode_tracks.toggled.connect(self._sync_mode)
         self._sync_mode()
 
         root = QVBoxLayout(self)
@@ -939,10 +949,50 @@ class ToolboxDialog(QDialog):
             except RuntimeError:
                 pass
         self.tree.setHeaderLabels([_tr("Kunde / Betrieb / Feld")])
+        self.tree_tracks.setHeaderLabels([_tr("Kunde / Betrieb / Feld")])
         self._refresh_terminal_format_label()
 
     def _sync_mode(self):
-        self.stack.setCurrentIndex(0 if self.mode_export.isChecked() else 1)
+        if self.mode_tracks.isChecked():
+            self.stack.setCurrentIndex(2)
+        else:
+            self.stack.setCurrentIndex(0 if self.mode_export.isChecked() else 1)
+
+    def _build_tracks_page(self):
+        w = self._mk_text(QGroupBox(), "Spurenerstellung", "setTitle")
+        v = QVBoxLayout(w)
+
+        form = QFormLayout()
+        self.spin_track_offset = QDoubleSpinBox()
+        self.spin_track_offset.setDecimals(2)
+        self.spin_track_offset.setRange(0.0, 1000.0)
+        self.spin_track_offset.setSingleStep(0.5)
+        self.spin_track_offset.setSuffix(" m")
+        self.spin_track_offset.setValue(0.0)
+        self._mk_text(self.spin_track_offset,
+                      "Die Spuren werden um diesen Abstand nach innen versetzt (0 m = genau auf der Feldgrenze).",
+                      "setToolTip")
+        form.addRow(self._mk_text(QLabel(), "Abstand zur Feldgrenze:"), self.spin_track_offset)
+
+        # Namenszusatz: wird jedem Spurnamen vorangestellt ("<Zusatz> Gerade 1").
+        # Spurnamen dürfen höchstens 32 Zeichen haben; " Gerade 123" braucht 11.
+        self.txt_track_prefix = QLineEdit()
+        self.txt_track_prefix.setMaxLength(20)
+        self._mk_text(self.txt_track_prefix, "optional, z. B. Vorgewende", "setPlaceholderText")
+        self._mk_text(self.txt_track_prefix,
+                      "Wird allen Spurnamen vorangestellt, z. B. „Vorgewende Gerade 1“.",
+                      "setToolTip")
+        form.addRow(self._mk_text(QLabel(), "Namenszusatz:"), self.txt_track_prefix)
+        v.addLayout(form)
+
+        self.tree_tracks = QTreeWidget()
+        self.tree_tracks.setHeaderLabels([_tr("Kunde / Betrieb / Feld")])
+        self.tree_tracks.setColumnCount(1)
+        self.tree_tracks.setSelectionMode(QTreeWidget.NoSelection)
+        self.tree_tracks.itemChanged.connect(self._on_tree_item_changed)
+        v.addWidget(self._mk_text(QLabel(), "Wähle die Felder, für die Spuren erstellt werden sollen:"))
+        v.addWidget(self.tree_tracks, 1)
+        return w
 
     def _build_export_page(self):
         w = self._mk_text(QGroupBox(), "Export-Optionen", "setTitle")
@@ -1157,7 +1207,12 @@ class ToolboxDialog(QDialog):
         return w
 
     def refresh_tree(self):
-        self.tree.clear()
+        # Export-Baum und Baum der Spurenerstellung zeigen dieselbe Auflistung
+        self._fill_tree(self.tree)
+        self._fill_tree(self.tree_tracks)
+
+    def _fill_tree(self, tree):
+        tree.clear()
         root = QgsProject.instance().layerTreeRoot()
         for ctr_node in root.children():
             if not isinstance(ctr_node, QgsLayerTreeGroup):
@@ -1165,7 +1220,7 @@ class ToolboxDialog(QDialog):
             ctr_item = QTreeWidgetItem([ctr_node.name()])
             ctr_item.setFlags(ctr_item.flags() | Qt.ItemIsUserCheckable)
             ctr_item.setCheckState(0, Qt.Checked)
-            self.tree.addTopLevelItem(ctr_item)
+            tree.addTopLevelItem(ctr_item)
             for frm_node in ctr_node.children():
                 if not isinstance(frm_node, QgsLayerTreeGroup):
                     continue
@@ -1186,7 +1241,7 @@ class ToolboxDialog(QDialog):
                     item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
                     item.setCheckState(0, Qt.Checked)
                     frm_item.addChild(item)
-        self.tree.expandAll()
+        tree.expandAll()
 
     def selected_terminal(self):
         """Liefert (Marke, Bezeichnung, Format) des gewählten Terminals."""
@@ -1196,9 +1251,15 @@ class ToolboxDialog(QDialog):
         return (None, None, None)
 
     def selected_export_map(self):
+        return self._selected_map(self.tree)
+
+    def selected_tracks_map(self):
+        return self._selected_map(self.tree_tracks)
+
+    def _selected_map(self, tree):
         res = {}
-        for i in range(self.tree.topLevelItemCount()):
-            ctr_item = self.tree.topLevelItem(i)
+        for i in range(tree.topLevelItemCount()):
+            ctr_item = tree.topLevelItem(i)
             if ctr_item.checkState(0) == Qt.Unchecked:
                 continue
             ctr_name = ctr_item.text(0)
@@ -2139,13 +2200,157 @@ class LkTechnikPathPlanner:
         self._apply_field_dropdowns()
 
     def _on_run(self):
-        if self.dlg.mode_export.isChecked():
+        if self.dlg.mode_tracks.isChecked():
+            self._run_with_wait_message(
+                _tr("Spuren werden erstellt, bitte warten…"), self._do_create_tracks)
+        elif self.dlg.mode_export.isChecked():
             # Das Hinweisfenster blendet _do_export() selbst ein - erst nach
             # den Rückfragen (z. B. Überschreiben?), damit es diese nicht verdeckt.
             self._run_with_wait_message(None, self._do_export)
         else:
             self._run_with_wait_message(
                 _tr("Felddaten werden importiert, bitte warten…"), self._do_import)
+
+    def _do_create_tracks(self):
+        """
+        Reiter "Spurenerstellung": erzeugt für die gewählten Felder Fahrspuren
+        entlang der Feldgrenze (optional nach innen versetzt) und fügt sie dem
+        Layer Fahrspuren des jeweiligen Betriebs hinzu.
+        """
+        selected = self.dlg.selected_tracks_map()
+        if not selected:
+            self.iface.messageBar().pushMessage(
+                _tr("Hinweis"), _tr("Keine Auswahl getroffen."), level=Qgis.Info, duration=4)
+            return
+        offset_m = float(self.dlg.spin_track_offset.value())
+        prefix = _norm_name(self.dlg.txt_track_prefix.text())
+        project = QgsProject.instance()
+        root = project.layerTreeRoot()
+
+        n_tracks = 0
+        n_fields = 0
+        no_boundary = []
+        too_small = []
+        no_layer = []
+
+        for ctr_name, frm_map in selected.items():
+            ctr_group = next((g for g in root.children()
+                              if isinstance(g, QgsLayerTreeGroup) and g.name() == ctr_name), None)
+            if ctr_group is None:
+                continue
+            for frm_name, field_ids in frm_map.items():
+                frm_group = next((g for g in ctr_group.children()
+                                  if isinstance(g, QgsLayerTreeGroup) and g.name() == frm_name), None)
+                if frm_group is None:
+                    continue
+                poly = _find_child_layer(frm_group, "Feldgrenzen")
+                line = _find_child_layer(frm_group, "Fahrspuren")
+                if line is None:
+                    no_layer.append(f"{ctr_name} / {frm_name}")
+                    continue
+
+                catalog = dict(_field_catalog_for_frm(frm_group))
+                wanted = set(catalog) if field_ids is None else set(field_ids)
+
+                # Feldgrenzen je Feld-ID
+                bounds = {}
+                if poly is not None:
+                    idf = _pick_field(_field_map(poly), "ID")
+                    if idf:
+                        for f in poly.getFeatures():
+                            v = f[idf]
+                            if _is_nullish(v):
+                                continue
+                            try:
+                                fid = int(v)
+                            except Exception:  # nosec B112
+                                continue
+                            if fid in wanted and f.geometry() and not f.geometry().isEmpty():
+                                bounds.setdefault(fid, []).append(f.geometry())
+
+                metric = _metric_crs_for_layer(poly) if poly is not None else None
+                to_metric = QgsCoordinateTransform(poly.crs(), metric, project) if poly is not None else None
+                to_line = QgsCoordinateTransform(metric, line.crs(), project) if metric is not None else None
+                multi = QgsWkbTypes.isMultiType(line.wkbType())
+
+                new_feats = []
+                for fid in sorted(wanted):
+                    label = catalog.get(fid) or _tr("Feld {field_id}").format(field_id=fid)
+                    geoms = bounds.get(fid)
+                    if not geoms:
+                        no_boundary.append(f"{ctr_name} / {frm_name} / {label}")
+                        continue
+                    # Mehrere Feldgrenzen eines Felds vereinigen - sonst entstünden
+                    # an gemeinsamen Kanten Spuren mitten im Feld.
+                    metric_geoms = []
+                    for g in geoms:
+                        gm = QgsGeometry(g)
+                        gm.transform(to_metric)
+                        metric_geoms.append(gm)
+                    merged = QgsGeometry.unaryUnion(metric_geoms) if len(metric_geoms) > 1 else metric_geoms[0]
+                    segments = tracks_for_boundary(merged, offset_m)
+                    if not segments:
+                        too_small.append(f"{ctr_name} / {frm_name} / {label}")
+                        continue
+                    n_straight = n_curve = 0
+                    for seg in segments:
+                        pts = [to_line.transform(p) for p in seg]
+                        if len(pts) == 2:
+                            n_straight += 1
+                            name = _tr("Gerade {n}").format(n=n_straight)
+                        else:
+                            n_curve += 1
+                            name = _tr("Kurve {n}").format(n=n_curve)
+                        if prefix:
+                            name = f"{prefix} {name}"[:32]
+                        geom = QgsGeometry.fromPolylineXY(pts)
+                        if multi:
+                            geom.convertToMultiType()
+                        nf = QgsFeature(line.fields())
+                        nf.setGeometry(geom)
+                        fmap = _field_map(line)
+                        for want, value in (("ID", fid), ("Name", name), ("Segment", None)):
+                            real = _pick_field(fmap, want)
+                            if real:
+                                nf.setAttribute(real, value)
+                        new_feats.append(nf)
+                    n_fields += 1
+
+                if new_feats:
+                    if line.isEditable():
+                        # Bearbeitungsmodus aktiv: in den Bearbeitungspuffer, Speichern bleibt beim Benutzer
+                        line.addFeatures(new_feats)
+                    else:
+                        line.dataProvider().addFeatures(new_feats)
+                        line.reload()
+                    line.updateExtents()
+                    line.triggerRepaint()
+                    n_tracks += len(new_feats)
+
+        notes = []
+        if no_boundary:
+            notes.append(_tr("Ohne Feldgrenze: {fields}").format(fields=", ".join(no_boundary)))
+        if too_small:
+            notes.append(_tr("Abstand zu groß, keine Spur möglich: {fields}").format(fields=", ".join(too_small)))
+        if no_layer:
+            notes.append(_tr("Kein Layer Fahrspuren: {farms}").format(farms=", ".join(no_layer)))
+
+        if n_tracks == 0:
+            self.iface.messageBar().pushMessage(
+                _tr("Hinweis"),
+                _tr("Es wurden keine Spuren erstellt.") + (" " + " ".join(notes) if notes else ""),
+                level=Qgis.Warning, duration=8)
+            return
+
+        msg = _tr("{n} Fahrspuren für {m} Feld(er) erstellt (Abstand {d} m).").format(
+            n=n_tracks, m=n_fields, d=f"{offset_m:g}")
+        if notes:
+            msg += " " + " ".join(notes)
+        self.iface.messageBar().pushMessage(
+            _tr("Erfolgreich"), msg,
+            level=Qgis.Warning if notes else Qgis.Success,
+            duration=10 if notes else 5)
+        self.dlg.accept()
 
     def _show_wait_message(self, text):
         """

@@ -294,6 +294,26 @@ TRANSLATIONS = {
         "Felddaten werden importiert, bitte warten…": "Importing field data, please wait…",
         "Felddaten werden exportiert, bitte warten…": "Exporting field data, please wait…",
         "Bitte warten": "Please wait",
+        # --- Spurenerstellung ---
+        "Spurenerstellung": "Track creation",
+        "Abstand zur Feldgrenze:": "Distance to field boundary:",
+        "Die Spuren werden um diesen Abstand nach innen versetzt (0 m = genau auf der Feldgrenze).":
+            "The tracks are offset inwards by this distance (0 m = exactly on the field boundary).",
+        "Wähle die Felder, für die Spuren erstellt werden sollen:":
+            "Select the fields to create tracks for:",
+        "Spuren werden erstellt, bitte warten…": "Creating tracks, please wait…",
+        "Namenszusatz:": "Name prefix:",
+        "optional, z. B. Vorgewende": "optional, e.g. Headland",
+        "Wird allen Spurnamen vorangestellt, z. B. „Vorgewende Gerade 1“.":
+            "Placed in front of all track names, e.g. “Headland Straight 1”.",
+        "Gerade {n}": "Straight {n}",
+        "Kurve {n}": "Curve {n}",
+        "Ohne Feldgrenze: {fields}": "Without field boundary: {fields}",
+        "Abstand zu groß, keine Spur möglich: {fields}": "Distance too large, no track possible: {fields}",
+        "Kein Layer Fahrspuren: {farms}": "No Swaths layer: {farms}",
+        "Es wurden keine Spuren erstellt.": "No tracks were created.",
+        "{n} Fahrspuren für {m} Feld(er) erstellt (Abstand {d} m).":
+            "{n} tracks created for {m} field(s) (distance {d} m).",
         "Keine Felder in den CN1-Daten gefunden.": "No fields found in the CN1 data.",
         "Die ZIP-Datei enthält keine CN1-Daten.": "The ZIP file does not contain CN1 data.",
         "Es wird nur eine Feldgrenze pro Feld unterstützt": "Only one boundary per field is supported",
