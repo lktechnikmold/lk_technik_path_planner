@@ -303,9 +303,17 @@ TRANSLATIONS = {
             "Select the fields to create tracks for:",
         "Spuren werden erstellt, bitte warten…": "Creating tracks, please wait…",
         "Namenszusatz:": "Name prefix:",
-        "optional, z. B. Vorgewende": "optional, e.g. Headland",
-        "Wird allen Spurnamen vorangestellt, z. B. „Vorgewende Gerade 1“.":
-            "Placed in front of all track names, e.g. “Headland Straight 1”.",
+        "optional, z. B.: Grubber": "optional, e.g.: Cultivator",
+        "Wird allen Spurnamen vorangestellt, z. B. „Grubber Gerade 1“.":
+            "Placed in front of all track names, e.g. “Cultivator Straight 1”.",
+        "Als Kontursegment anlegen": "Create as contour segment",
+        "Alle neu erstellten Spuren eines Felds kommen in ein gemeinsames Kontursegment "
+        "(Spalte Segment). Name des Segments ist der Namenszusatz, ohne Namenszusatz "
+        "„Kontursegment“.":
+            "All newly created tracks of a field are put into one contour segment "
+            "(column Segment). The segment is named after the name prefix, without a prefix "
+            "“Contour segment”.",
+        "Kontursegment": "Contour segment",
         "Gerade {n}": "Straight {n}",
         "Kurve {n}": "Curve {n}",
         "Ohne Feldgrenze: {fields}": "Without field boundary: {fields}",

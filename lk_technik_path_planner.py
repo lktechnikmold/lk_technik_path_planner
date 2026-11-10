@@ -978,12 +978,22 @@ class ToolboxDialog(QDialog):
         # Spurnamen dürfen höchstens 32 Zeichen haben; " Gerade 123" braucht 11.
         self.txt_track_prefix = QLineEdit()
         self.txt_track_prefix.setMaxLength(20)
-        self._mk_text(self.txt_track_prefix, "optional, z. B. Vorgewende", "setPlaceholderText")
+        self._mk_text(self.txt_track_prefix, "optional, z. B.: Grubber", "setPlaceholderText")
         self._mk_text(self.txt_track_prefix,
-                      "Wird allen Spurnamen vorangestellt, z. B. „Vorgewende Gerade 1“.",
+                      "Wird allen Spurnamen vorangestellt, z. B. „Grubber Gerade 1“.",
                       "setToolTip")
         form.addRow(self._mk_text(QLabel(), "Namenszusatz:"), self.txt_track_prefix)
         v.addLayout(form)
+
+        # Kontursegment: alle neuen Spuren eines Felds bekommen denselben Wert
+        # in der Spalte Segment (Name = Namenszusatz, sonst "Kontursegment").
+        self.chk_track_segment = self._mk_text(QCheckBox(), "Als Kontursegment anlegen")
+        self._mk_text(self.chk_track_segment,
+                      "Alle neu erstellten Spuren eines Felds kommen in ein gemeinsames Kontursegment "
+                      "(Spalte Segment). Name des Segments ist der Namenszusatz, ohne Namenszusatz "
+                      "„Kontursegment“.",
+                      "setToolTip")
+        v.addWidget(self.chk_track_segment)
 
         self.tree_tracks = QTreeWidget()
         self.tree_tracks.setHeaderLabels([_tr("Kunde / Betrieb / Feld")])
@@ -2224,6 +2234,8 @@ class LkTechnikPathPlanner:
             return
         offset_m = float(self.dlg.spin_track_offset.value())
         prefix = _norm_name(self.dlg.txt_track_prefix.text())
+        as_segment = self.dlg.chk_track_segment.isChecked()
+        segment_base = prefix or _tr("Kontursegment")
         project = QgsProject.instance()
         root = project.layerTreeRoot()
 
@@ -2273,6 +2285,22 @@ class LkTechnikPathPlanner:
                 to_line = QgsCoordinateTransform(metric, line.crs(), project) if metric is not None else None
                 multi = QgsWkbTypes.isMultiType(line.wkbType())
 
+                # vorhandene Segmentnamen je Feld - ein neues Kontursegment darf
+                # nicht in ein bestehendes gleichen Namens hineinrutschen
+                used_segments = {}
+                if as_segment:
+                    lfm = _field_map(line)
+                    l_id, l_seg = _pick_field(lfm, "ID"), _pick_field(lfm, "Segment")
+                    if l_id and l_seg:
+                        for f in line.getFeatures():
+                            sv = f[l_seg]
+                            if _is_nullish(sv):
+                                continue
+                            try:
+                                used_segments.setdefault(int(f[l_id]), set()).add(str(sv).strip().lower())
+                            except Exception:  # nosec B112
+                                continue
+
                 new_feats = []
                 for fid in sorted(wanted):
                     label = catalog.get(fid) or _tr("Feld {field_id}").format(field_id=fid)
@@ -2292,6 +2320,15 @@ class LkTechnikPathPlanner:
                     if not segments:
                         too_small.append(f"{ctr_name} / {frm_name} / {label}")
                         continue
+                    seg_value = None
+                    if as_segment:
+                        taken = used_segments.get(fid, set())
+                        seg_value = segment_base[:32]
+                        k = 2
+                        while seg_value.lower() in taken:
+                            tail = f" {k}"
+                            seg_value = segment_base[:32 - len(tail)] + tail
+                            k += 1
                     n_straight = n_curve = 0
                     for seg in segments:
                         pts = [to_line.transform(p) for p in seg]
@@ -2309,7 +2346,7 @@ class LkTechnikPathPlanner:
                         nf = QgsFeature(line.fields())
                         nf.setGeometry(geom)
                         fmap = _field_map(line)
-                        for want, value in (("ID", fid), ("Name", name), ("Segment", None)):
+                        for want, value in (("ID", fid), ("Name", name), ("Segment", seg_value)):
                             real = _pick_field(fmap, want)
                             if real:
                                 nf.setAttribute(real, value)
