@@ -114,7 +114,8 @@ except Exception:
 from qgis.core import (
     Qgis, QgsProject, QgsVectorLayer, QgsField, QgsFields, QgsFeature, QgsGeometry, QgsPointXY,
     QgsLayerTreeGroup, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsVectorFileWriter,
-    QgsFeatureSink, QgsWkbTypes, QgsEditorWidgetSetup, QgsDistanceArea, QgsUnitTypes
+    QgsFeatureSink, QgsWkbTypes, QgsEditorWidgetSetup, QgsDistanceArea, QgsUnitTypes,
+    QgsRectangle, QgsFeatureRequest
 )
 
 def _tr(message: str) -> str:
@@ -2811,10 +2812,19 @@ class LkTechnikPathPlanner:
         ctr_name = parent.parent().text(0)
 
         menu = QMenu()
+        act_zoom = menu.addAction(_tr("Auf Feld zoomen"))
+        menu.addSeparator()
         act_rename = menu.addAction(_tr("Feld umbenennen…"))
         act_delete = menu.addAction(_tr("Feld löschen…"))
         chosen = menu.exec_(tree.viewport().mapToGlobal(pos))
-        if chosen == act_rename:
+        if chosen == act_zoom:
+            try:
+                self._zoom_to_field(ctr_name, frm_name, int(fid), item.text(0))
+            except Exception as e:
+                self.iface.messageBar().pushMessage(
+                    _tr("Fehler"), _tr("Zoomen fehlgeschlagen: {e}").format(e=e), level=Qgis.Critical, duration=6
+                )
+        elif chosen == act_rename:
             try:
                 self._rename_field(ctr_name, frm_name, int(fid), item.text(0))
             except Exception as e:
@@ -2828,6 +2838,75 @@ class LkTechnikPathPlanner:
                 self.iface.messageBar().pushMessage(
                     _tr("Fehler"), _tr("Löschen fehlgeschlagen: {e}").format(e=e), level=Qgis.Critical, duration=6
                 )
+
+    def _zoom_to_field(self, ctr_name: str, frm_name: str, field_id: int, current_name: str):
+        """
+        Zoomt die Karte auf ein Feld - wie "Zoom zum Objekt" in der
+        Attributtabelle: Ausdehnung aller Feldgrenzen des Felds (mit Rand),
+        danach kurz aufblinken. Ohne Feldgrenze werden Fahrspuren und
+        Hindernisse des Felds verwendet.
+        """
+        root = QgsProject.instance().layerTreeRoot()
+        frm_group = None
+        for ctr in root.children():
+            if isinstance(ctr, QgsLayerTreeGroup) and ctr.name() == ctr_name:
+                frm_group = next((g for g in ctr.children()
+                                  if isinstance(g, QgsLayerTreeGroup) and g.name() == frm_name), None)
+                if frm_group is not None:
+                    break
+        if frm_group is None:
+            return
+
+        def _ids(layer):
+            idf = _pick_field(_field_map(layer), "ID")
+            if not idf:
+                return []
+            out = []
+            for f in layer.getFeatures():
+                try:
+                    if int(f[idf]) == int(field_id) and f.hasGeometry() and not f.geometry().isEmpty():
+                        out.append(f.id())
+                except Exception:  # nosec B112
+                    continue
+            return out
+
+        hits = []
+        for group in (("Feldgrenzen",), ("Fahrspuren", "Punkthindernis", "Flaechenhindernis")):
+            for lname in group:
+                lyr = _find_child_layer(frm_group, lname)
+                if lyr is not None:
+                    ids = _ids(lyr)
+                    if ids:
+                        hits.append((lyr, ids))
+            if hits:
+                break
+        if not hits:
+            self.iface.messageBar().pushMessage(
+                _tr("Hinweis"), _tr("Feld „{name}“ hat keine Geometrie.").format(name=current_name),
+                level=Qgis.Info, duration=4)
+            return
+
+        canvas = self.iface.mapCanvas()
+        settings = canvas.mapSettings()
+        extent = None
+        for lyr, ids in hits:
+            req = QgsFeatureRequest().setFilterFids(ids).setNoAttributes()
+            for f in lyr.getFeatures(req):
+                bb = settings.layerToMapCoordinates(lyr, f.geometry().boundingBox())
+                if extent is None:
+                    extent = QgsRectangle(bb)
+                else:
+                    extent.combineExtentWith(bb)
+        if extent is None:
+            return
+        if extent.width() == 0 and extent.height() == 0:
+            # Einzelner Punkt: wie QGIS auf den Punkt zentrieren
+            canvas.setCenter(extent.center())
+        else:
+            canvas.zoomToFeatureExtent(extent)
+        canvas.refresh()
+        for lyr, ids in hits:
+            canvas.flashFeatureIds(lyr, ids)
 
     def _delete_field(self, ctr_name: str, frm_name: str, field_id: int, current_name: str):
         """Löscht ein einzelnes Feld (siehe _delete_fields)."""

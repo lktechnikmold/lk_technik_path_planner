@@ -234,6 +234,9 @@ TRANSLATIONS = {
             "boundary/boundaries, swaths, obstacles and the catalog entries:\n\n",
         "{n} Felder wurden gelöscht.": "{n} fields have been deleted.",
         "Umbenennen fehlgeschlagen: {e}": "Rename failed: {e}",
+        "Zoomen fehlgeschlagen: {e}": "Zoom failed: {e}",
+        "Auf Feld zoomen": "Zoom to field",
+        "Feld „{name}“ hat keine Geometrie.": "Field “{name}” has no geometry.",
         "Löschen fehlgeschlagen: {e}": "Delete failed: {e}",
         "Die Layer dieses Betriebs sind noch temporär (nicht gespeichert).":
             "The layers of this farm are still temporary (not saved).",
