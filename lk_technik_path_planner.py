@@ -69,7 +69,8 @@ except Exception:
 from qgis.PyQt.QtWidgets import (
     QAction, QDialog, QFileDialog, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem,
     QPushButton, QLineEdit, QLabel, QGroupBox, QCheckBox, QRadioButton, QStackedWidget,
-    QFormLayout, QInputDialog, QMessageBox, QWidget, QToolButton, QDoubleSpinBox, QButtonGroup, QComboBox, QMenu
+    QFormLayout, QInputDialog, QMessageBox, QWidget, QToolButton, QDoubleSpinBox, QButtonGroup, QComboBox, QMenu,
+    QProgressDialog, QApplication
 )
 try:
     from .john_deere_gen4_export import export_john_deere_gen4
@@ -2139,9 +2140,52 @@ class LkTechnikPathPlanner:
 
     def _on_run(self):
         if self.dlg.mode_export.isChecked():
-            self._do_export()
+            # Das Hinweisfenster blendet _do_export() selbst ein - erst nach
+            # den Rückfragen (z. B. Überschreiben?), damit es diese nicht verdeckt.
+            self._run_with_wait_message(None, self._do_export)
         else:
-            self._do_import()
+            self._run_with_wait_message(
+                _tr("Felddaten werden importiert, bitte warten…"), self._do_import)
+
+    def _show_wait_message(self, text):
+        """
+        Zeigt ein kleines Hinweisfenster und den Warte-Cursor, damit der Path
+        Planner während längerer Aktionen nicht wie aufgehängt wirkt.
+        """
+        if getattr(self, "_wait_dialog", None) is not None:
+            self._wait_dialog.setLabelText(text)
+            return
+        parent = self.dlg if isinstance(self.dlg, QWidget) else self.iface.mainWindow()
+        busy = QProgressDialog(text, None, 0, 0, parent)
+        busy.setWindowTitle(_tr("Bitte warten"))
+        busy.setWindowModality(Qt.WindowModal)
+        busy.setMinimumDuration(0)
+        busy.setCancelButton(None)
+        busy.setAutoClose(False)
+        busy.show()
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        self._wait_dialog = busy
+        # Fenster sofort zeichnen, bevor die Aktion den GUI-Thread blockiert
+        for _ in range(3):
+            QApplication.processEvents()
+
+    def _hide_wait_message(self):
+        busy = getattr(self, "_wait_dialog", None)
+        if busy is None:
+            return
+        self._wait_dialog = None
+        QApplication.restoreOverrideCursor()
+        busy.close()
+        busy.deleteLater()
+
+    def _run_with_wait_message(self, text, func):
+        """Führt func aus; mit text wird das Hinweisfenster gleich eingeblendet."""
+        if text:
+            self._show_wait_message(text)
+        try:
+            return func()
+        finally:
+            self._hide_wait_message()
     
     def _find_or_create_group(self, parent_group: QgsLayerTreeGroup, name: str) -> QgsLayerTreeGroup:
         name_n = _norm_name(name)
@@ -3528,8 +3572,11 @@ class LkTechnikPathPlanner:
             )
             if reply != QMessageBox.Yes:
                 return
-            if is_cn1:
-                remove_existing_cn1(out_dir)
+
+        self._show_wait_message(_tr("Felddaten werden exportiert, bitte warten…"))
+
+        if existing_path and os.path.exists(existing_path) and is_cn1:
+            remove_existing_cn1(out_dir)
 
         if is_cn1:
             try:
