@@ -115,7 +115,7 @@ from qgis.core import (
     Qgis, QgsProject, QgsVectorLayer, QgsField, QgsFields, QgsFeature, QgsGeometry, QgsPointXY,
     QgsLayerTreeGroup, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsVectorFileWriter,
     QgsFeatureSink, QgsWkbTypes, QgsEditorWidgetSetup, QgsDistanceArea, QgsUnitTypes,
-    QgsRectangle, QgsFeatureRequest
+    QgsRectangle, QgsFeatureRequest, QgsProviderRegistry
 )
 
 def _tr(message: str) -> str:
@@ -1387,6 +1387,7 @@ class LkTechnikPathPlanner:
         # Felder.csv-Automatik
         self._wired_feldgrenzen = set()   # Layer-IDs mit verbundenem Commit-Signal
         self._felder_guard = False        # Re-Entrancy-Schutz beim Zurückschreiben der ID
+        self._import_overwrite = False    # Import in vorhandenen Zielordner bestätigt
 
     def tr(self, m):
         return _tr(m)
@@ -2239,8 +2240,9 @@ class LkTechnikPathPlanner:
             # den Rückfragen (z. B. Überschreiben?), damit es diese nicht verdeckt.
             self._run_with_wait_message(None, self._do_export)
         else:
-            self._run_with_wait_message(
-                _tr("Felddaten werden importiert, bitte warten…"), self._do_import)
+            # Das Hinweisfenster blendet _do_import() selbst ein - erst nach
+            # der Rückfrage "Überschreiben?", damit es diese nicht verdeckt.
+            self._run_with_wait_message(None, self._do_import)
 
     def _do_create_tracks(self):
         """
@@ -3184,6 +3186,70 @@ class LkTechnikPathPlanner:
         )
 
     # ------------------------- IMPORT -------------------------
+    # Dateien, die ein Import je Betrieb anlegt (<Ziel>/<Kunde>/<Betrieb>/...)
+    _IMPORT_FILES = ("Feldgrenzen.gpkg", "Fahrspuren.gpkg", "Punkthindernis.gpkg", "Flaechenhindernis.gpkg",
+                     FELDER_CSV_NAME)
+
+    def _existing_import_dirs(self, out_dir):
+        """Betriebsordner im Zielordner, die bereits importierte Felddaten enthalten."""
+        found = []
+        if not out_dir or not os.path.isdir(out_dir):
+            return found
+        for ctr in sorted(os.listdir(out_dir)):
+            ctr_dir = os.path.join(out_dir, ctr)
+            if not os.path.isdir(ctr_dir):
+                continue
+            for frm in sorted(os.listdir(ctr_dir)):
+                frm_dir = os.path.join(ctr_dir, frm)
+                if os.path.isdir(frm_dir) and any(os.path.exists(os.path.join(frm_dir, n)) for n in self._IMPORT_FILES):
+                    found.append(frm_dir)
+        return found
+
+    def _prepare_import_dir(self, base_dir, keep_layers=()):
+        """
+        Wird von allen Importern aufgerufen, bevor sie die Dateien eines
+        Betriebs schreiben. Nach bestätigtem Überschreiben werden die alten
+        Layer dieses Betriebsordners aus dem Projekt entfernt und die alten
+        Dateien ersetzt - sonst entstünde ein zweiter Layersatz und die Daten
+        würden doppelt in die GPKG-Dateien geschrieben.
+        """
+        if not self._import_overwrite:
+            return
+        base = os.path.normcase(os.path.abspath(base_dir))
+        keep = {lyr.id() for lyr in keep_layers if lyr is not None}
+        project = QgsProject.instance()
+        old = []
+        for lid, lyr in project.mapLayers().items():
+            if lid in keep:
+                continue
+            try:
+                path = QgsProviderRegistry.instance().decodeUri(lyr.providerType(), lyr.source()).get("path") or ""
+            except Exception:
+                path = ""
+            if (path and os.path.basename(path) in self._IMPORT_FILES
+                    and os.path.normcase(os.path.dirname(os.path.abspath(path))) == base):
+                old.append(lid)
+        if old:
+            project.removeMapLayers(old)
+        for name in self._IMPORT_FILES:
+            target = os.path.join(base_dir, name)
+            if name == FELDER_CSV_NAME:
+                if os.path.exists(target):
+                    _write_felder_csv(target, {})
+                continue
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    if os.path.exists(target + suffix):
+                        os.remove(target + suffix)
+                except OSError:
+                    pass  # noch gesperrt: wird beim Schreiben layerweise überschrieben
+
+    @staticmethod
+    def _gpkg_write_options(opts, gpkg_path):
+        """Vorhandene GPKG (nach bestätigtem Überschreiben) layerweise ersetzen statt anhängen."""
+        if os.path.exists(gpkg_path):
+            opts.actionOnExistingFile = QgsVectorFileWriter.CreateOrOverwriteLayer
+
     def _import_cn1_path(self, path, out_dir):
         try:
             ok = import_cn1(self, path, out_dir)
@@ -3207,6 +3273,36 @@ class LkTechnikPathPlanner:
         self.dlg.accept()
 
     def _do_import(self):
+        """
+        Fragt nach, wenn im Zielordner schon importierte Felddaten liegen
+        (Überschreiben / Abbrechen), und führt dann den Import aus.
+        """
+        path = self.dlg.in_line.text().strip()
+        out_dir = self.dlg.out_dir_line.text().strip() or None
+        self._import_overwrite = False
+        if path and out_dir and self._existing_import_dirs(out_dir):
+            reply = QMessageBox.question(
+                self.iface.mainWindow(),
+                _tr("Überschreiben?"),
+                _tr("Im Zielordner liegen bereits importierte Felddaten:\n{path}\n\n"
+                    "Überschreiben? Betriebe, die im Import vorkommen, werden ersetzt; "
+                    "andere Betriebe im Ordner bleiben erhalten.\n\n"
+                    "Um zusätzlich zu importieren, bitte einen anderen Zielordner wählen.").format(path=out_dir),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                self.iface.messageBar().pushMessage(
+                    _tr("Hinweis"), _tr("Import abgebrochen."), level=Qgis.Info, duration=4)
+                return
+            self._import_overwrite = True
+        self._show_wait_message(_tr("Felddaten werden importiert, bitte warten…"))
+        try:
+            self._do_import_files()
+        finally:
+            self._import_overwrite = False
+
+    def _do_import_files(self):
         path = self.dlg.in_line.text().strip()
         out_dir = self.dlg.out_dir_line.text().strip() or None
 
@@ -3408,12 +3504,14 @@ class LkTechnikPathPlanner:
                 return layers_dict
             base = os.path.join(out_dir, _safe(ctr_name), _safe(frm_name))
             os.makedirs(base, exist_ok=True)
+            self._prepare_import_dir(base, layers_dict.values())
             new_layers = {}
             tr_ctx = project.transformContext()
             for key, mem_layer in layers_dict.items():
                 gpkg_path = os.path.join(base, f"{_safe(key)}.gpkg")
                 opts = QgsVectorFileWriter.SaveVectorOptions()
                 opts.driverName = "GPKG"; opts.layerName = key
+                self._gpkg_write_options(opts, gpkg_path)
                 try:
                     opts.attributesToExport = [f.name() for f in mem_layer.fields() if f.name().lower() != 'fid']
                 except Exception:  # nosec B110

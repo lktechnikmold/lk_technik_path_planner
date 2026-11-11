@@ -191,6 +191,7 @@ def import_cn1(plugin, path, out_dir=None):
             return layers_dict
         base = os.path.join(out_dir, _safe(ctr_name), _safe(frm_name))
         os.makedirs(base, exist_ok=True)
+        plugin._prepare_import_dir(base, layers_dict.values())
         new_layers = {}
         tr_ctx = project.transformContext()
         for key, mem_layer in layers_dict.items():
@@ -198,6 +199,7 @@ def import_cn1(plugin, path, out_dir=None):
             opts = QgsVectorFileWriter.SaveVectorOptions()
             opts.driverName = "GPKG"
             opts.layerName = key
+            plugin._gpkg_write_options(opts, gpkg_path)
             try:
                 opts.attributesToExport = [f.name() for f in mem_layer.fields() if f.name().lower() != "fid"]
             except Exception:  # nosec B110

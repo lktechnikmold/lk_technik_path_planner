@@ -209,6 +209,7 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
 
         base = os.path.join(out_dir, _safe(ctr_name), _safe(frm_name))
         os.makedirs(base, exist_ok=True)
+        plugin._prepare_import_dir(base, layers_dict.values())
 
         new_layers = {}
         tr_ctx = project.transformContext()
@@ -219,6 +220,7 @@ def import_john_deere_gen4(plugin, gen4_dir, out_dir=None):
             opts = QgsVectorFileWriter.SaveVectorOptions()
             opts.driverName = "GPKG"
             opts.layerName = key
+            plugin._gpkg_write_options(opts, gpkg_path)
 
             try:
                 opts.attributesToExport = [

@@ -286,6 +286,15 @@ TRANSLATIONS = {
         "Bitte Zielordner wählen.": "Please select a target folder.",
         "Keine Auswahl getroffen.": "Nothing selected.",
         "Überschreiben?": "Overwrite?",
+        "Im Zielordner liegen bereits importierte Felddaten:\n{path}\n\n"
+        "Überschreiben? Betriebe, die im Import vorkommen, werden ersetzt; "
+        "andere Betriebe im Ordner bleiben erhalten.\n\n"
+        "Um zusätzlich zu importieren, bitte einen anderen Zielordner wählen.":
+            "The target folder already contains imported field data:\n{path}\n\n"
+            "Overwrite? Farms contained in the import will be replaced; "
+            "other farms in the folder are kept.\n\n"
+            "To import in addition, please choose a different target folder.",
+        "Import abgebrochen.": "Import cancelled.",
         "Im Zielordner existiert bereits ein {format}-Export:\n{path}\n\nÜberschreiben?":
             "A {format} export already exists in the target folder:\n{path}\n\nOverwrite?",
         "Erfolgreich": "Success",
