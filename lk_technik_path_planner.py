@@ -876,7 +876,7 @@ class ToolboxDialog(QDialog):
         logo_lbl = QLabel()
         pix = QPixmap(":/isoxml/icons/logo.png")
         if not pix.isNull():
-            logo_lbl.setPixmap(pix.scaledToHeight(110, Qt.SmoothTransformation))
+            logo_lbl.setPixmap(pix.scaledToHeight(110, Qt.TransformationMode.SmoothTransformation))
             self._mk_text(logo_lbl, "LK-Technik Path Planner", "setToolTip")
 
         self.mode_import = QRadioButton("Import")
@@ -894,8 +894,8 @@ class ToolboxDialog(QDialog):
         self.cmb_lang.currentIndexChanged.connect(self._on_language_selected)
 
         right_col = QVBoxLayout()
-        right_col.addWidget(self.cmb_lang, 0, Qt.AlignRight)
-        right_col.addWidget(logo_lbl, 0, Qt.AlignRight)
+        right_col.addWidget(self.cmb_lang, 0, Qt.AlignmentFlag.AlignRight)
+        right_col.addWidget(logo_lbl, 0, Qt.AlignmentFlag.AlignRight)
 
         top_row = QHBoxLayout()
         top_row.addWidget(self.mode_export)
@@ -1000,7 +1000,7 @@ class ToolboxDialog(QDialog):
         self.tree_tracks = QTreeWidget()
         self.tree_tracks.setHeaderLabels([_tr("Kunde / Betrieb / Feld")])
         self.tree_tracks.setColumnCount(1)
-        self.tree_tracks.setSelectionMode(QTreeWidget.NoSelection)
+        self.tree_tracks.setSelectionMode(QTreeWidget.SelectionMode.NoSelection)
         self.tree_tracks.itemChanged.connect(self._on_tree_item_changed)
         v.addWidget(self._mk_text(QLabel(), "Wähle die Felder, für die Spuren erstellt werden sollen:"))
         v.addWidget(self.tree_tracks, 1)
@@ -1076,8 +1076,8 @@ class ToolboxDialog(QDialog):
         self._mk_text(self.btn_adv_export, "Erweiterte Einstellungen")
         self.btn_adv_export.setCheckable(True)
         self.btn_adv_export.setChecked(False)
-        self.btn_adv_export.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.btn_adv_export.setArrowType(Qt.RightArrow)
+        self.btn_adv_export.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.btn_adv_export.setArrowType(Qt.ArrowType.RightArrow)
 
         self.adv_export_widget = QWidget()
         adv_layout = QFormLayout(self.adv_export_widget)
@@ -1122,7 +1122,7 @@ class ToolboxDialog(QDialog):
 
         def _toggle_adv_export(checked):
             self.adv_export_widget.setVisible(checked)
-            self.btn_adv_export.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+            self.btn_adv_export.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
 
         self.btn_adv_export.toggled.connect(_toggle_adv_export)
 
@@ -1135,8 +1135,8 @@ class ToolboxDialog(QDialog):
         self.tree.setColumnCount(1)
         # Mehrfachauswahl (Strg/Umschalt) nur zum gleichzeitigen Löschen von Feldern;
         # die Export-Auswahl läuft weiter über die Checkboxen.
-        self.tree.setSelectionMode(QTreeWidget.ExtendedSelection)
-        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.itemChanged.connect(self._on_tree_item_changed)
         v.addWidget(self._mk_text(QLabel(), "Wähle, was exportiert werden soll:"))
         v.addWidget(self.tree, 1)
@@ -1230,15 +1230,15 @@ class ToolboxDialog(QDialog):
             if not isinstance(ctr_node, QgsLayerTreeGroup):
                 continue
             ctr_item = QTreeWidgetItem([ctr_node.name()])
-            ctr_item.setFlags(ctr_item.flags() | Qt.ItemIsUserCheckable)
-            ctr_item.setCheckState(0, Qt.Checked)
+            ctr_item.setFlags(ctr_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            ctr_item.setCheckState(0, Qt.CheckState.Checked)
             tree.addTopLevelItem(ctr_item)
             for frm_node in ctr_node.children():
                 if not isinstance(frm_node, QgsLayerTreeGroup):
                     continue
                 frm_item = QTreeWidgetItem([frm_node.name()])
-                frm_item.setFlags(frm_item.flags() | Qt.ItemIsUserCheckable)
-                frm_item.setCheckState(0, Qt.Checked)
+                frm_item.setFlags(frm_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                frm_item.setCheckState(0, Qt.CheckState.Checked)
                 ctr_item.addChild(frm_item)
                 # Felder aus dem Katalog (Felder.csv) statt nur aus Feldgrenzen.
                 # Dadurch erscheinen auch Felder ohne Feldgrenze (z.B. nur Fahrspuren).
@@ -1249,9 +1249,9 @@ class ToolboxDialog(QDialog):
                 for stored_id, label_name in catalog:
                     label = label_name if label_name else str(stored_id)
                     item = QTreeWidgetItem([label])
-                    item.setData(0, Qt.UserRole, int(stored_id))
-                    item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-                    item.setCheckState(0, Qt.Checked)
+                    item.setData(0, Qt.ItemDataRole.UserRole, int(stored_id))
+                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    item.setCheckState(0, Qt.CheckState.Checked)
                     frm_item.addChild(item)
         tree.expandAll()
 
@@ -1272,22 +1272,22 @@ class ToolboxDialog(QDialog):
         res = {}
         for i in range(tree.topLevelItemCount()):
             ctr_item = tree.topLevelItem(i)
-            if ctr_item.checkState(0) == Qt.Unchecked:
+            if ctr_item.checkState(0) == Qt.CheckState.Unchecked:
                 continue
             ctr_name = ctr_item.text(0)
             frm_map = {}
             for j in range(ctr_item.childCount()):
                 frm_item = ctr_item.child(j)
-                if frm_item.checkState(0) == Qt.Unchecked:
+                if frm_item.checkState(0) == Qt.CheckState.Unchecked:
                     continue
                 frm_name = frm_item.text(0)
                 field_ids = set()
                 any_child_checked = False
                 for k in range(frm_item.childCount()):
                     fld_item = frm_item.child(k)
-                    if fld_item.checkState(0) != Qt.Unchecked:
+                    if fld_item.checkState(0) != Qt.CheckState.Unchecked:
                         any_child_checked = True
-                        fid = fld_item.data(0, Qt.UserRole)
+                        fid = fld_item.data(0, Qt.ItemDataRole.UserRole)
                         if fid is not None:
                             field_ids.add(int(fid))
                 if frm_item.childCount() == 0:
@@ -1309,8 +1309,8 @@ class ToolboxDialog(QDialog):
         """Setzt alle Eltern des Items auf Checked (damit Export-Auswahl nicht leer ist)."""
         p = item.parent()
         while p is not None:
-            if p.checkState(0) != Qt.Checked:
-                p.setCheckState(0, Qt.Checked)
+            if p.checkState(0) != Qt.CheckState.Checked:
+                p.setCheckState(0, Qt.CheckState.Checked)
             p = p.parent()
 
     def _update_parent_state_from_children(self, item: QTreeWidgetItem):
@@ -1326,9 +1326,9 @@ class ToolboxDialog(QDialog):
             unchecked = 0
             for i in range(p.childCount()):
                 st = p.child(i).checkState(0)
-                if st == Qt.Checked:
+                if st == Qt.CheckState.Checked:
                     checked += 1
-                elif st == Qt.Unchecked:
+                elif st == Qt.CheckState.Unchecked:
                     unchecked += 1
                 else:
                     # PartiallyChecked zählt als gemischt
@@ -1336,11 +1336,11 @@ class ToolboxDialog(QDialog):
                     unchecked += 1
 
             if checked == p.childCount():
-                new_state = Qt.Checked
+                new_state = Qt.CheckState.Checked
             elif unchecked == p.childCount():
-                new_state = Qt.Unchecked
+                new_state = Qt.CheckState.Unchecked
             else:
-                new_state = Qt.PartiallyChecked
+                new_state = Qt.CheckState.PartiallyChecked
 
             if p.checkState(0) == new_state:
                 break
@@ -1367,7 +1367,7 @@ class ToolboxDialog(QDialog):
                 return
 
             # Fall B: Feld (Leaf) geklickt -> Eltern automatisch setzen
-            if state == Qt.Checked:
+            if state == Qt.CheckState.Checked:
                 # sobald ein Feld aktiv ist -> Betrieb + Kunde aktiv
                 self._set_parent_checked(item)
             else:
@@ -2186,7 +2186,7 @@ class LkTechnikPathPlanner:
         self.dlg.refresh_tree()
 
         self.dlg.show()
-        self.dlg.exec_()
+        self.dlg.exec()
 
     def _sync_project_state(self):
         """
@@ -2420,12 +2420,12 @@ class LkTechnikPathPlanner:
         parent = self.dlg if isinstance(self.dlg, QWidget) else self.iface.mainWindow()
         busy = QProgressDialog(text, None, 0, 0, parent)
         busy.setWindowTitle(_tr("Bitte warten"))
-        busy.setWindowModality(Qt.WindowModal)
+        busy.setWindowModality(Qt.WindowModality.WindowModal)
         busy.setMinimumDuration(0)
         busy.setCancelButton(None)
         busy.setAutoClose(False)
         busy.show()
-        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         self._wait_dialog = busy
         # Fenster sofort zeichnen, bevor die Aktion den GUI-Thread blockiert
         for _ in range(3):
@@ -2615,7 +2615,7 @@ class LkTechnikPathPlanner:
         line_edit = input_dlg.findChild(QLineEdit)
         if line_edit is not None:
             line_edit.setMaxLength(32)
-        ok = input_dlg.exec_() == QDialog.Accepted
+        ok = input_dlg.exec() == QDialog.DialogCode.Accepted
         name = input_dlg.textValue()
         if not ok:
             return
@@ -2646,7 +2646,7 @@ class LkTechnikPathPlanner:
 
         dlg = AddFarmDialog(customers, self.iface.mainWindow())
 
-        if dlg.exec_() != QDialog.Accepted:
+        if dlg.exec() != QDialog.DialogCode.Accepted:
             return
 
         ctr_name = dlg.customer_name()
@@ -2715,7 +2715,7 @@ class LkTechnikPathPlanner:
             return
 
         dlg = AddFieldDialog(pairs, self.iface.mainWindow())
-        if dlg.exec_() != QDialog.Accepted:
+        if dlg.exec() != QDialog.DialogCode.Accepted:
             return
 
         ctr_name, frm_name = dlg.selected_pair()
@@ -2799,7 +2799,7 @@ class LkTechnikPathPlanner:
         def _is_field_leaf(it):
             # nur Feld-Blätter haben eine ID und liegen unter Betrieb unter Kunde
             p = it.parent()
-            return it.data(0, Qt.UserRole) is not None and p is not None and p.parent() is not None
+            return it.data(0, Qt.ItemDataRole.UserRole) is not None and p is not None and p.parent() is not None
 
         if not _is_field_leaf(item):
             return
@@ -2812,11 +2812,11 @@ class LkTechnikPathPlanner:
         if len(selected) > 1:
             menu = QMenu()
             act_delete_many = menu.addAction(_tr("Felder löschen…"))
-            if menu.exec_(tree.viewport().mapToGlobal(pos)) == act_delete_many:
+            if menu.exec(tree.viewport().mapToGlobal(pos)) == act_delete_many:
                 try:
                     self._delete_fields([
                         (it.parent().parent().text(0), it.parent().text(0),
-                         int(it.data(0, Qt.UserRole)), it.text(0))
+                         int(it.data(0, Qt.ItemDataRole.UserRole)), it.text(0))
                         for it in selected
                     ])
                 except Exception as e:
@@ -2826,7 +2826,7 @@ class LkTechnikPathPlanner:
                     )
             return
 
-        fid = item.data(0, Qt.UserRole)
+        fid = item.data(0, Qt.ItemDataRole.UserRole)
         parent = item.parent()
         frm_name = parent.text(0)
         ctr_name = parent.parent().text(0)
@@ -2836,7 +2836,7 @@ class LkTechnikPathPlanner:
         menu.addSeparator()
         act_rename = menu.addAction(_tr("Feld umbenennen…"))
         act_delete = menu.addAction(_tr("Feld löschen…"))
-        chosen = menu.exec_(tree.viewport().mapToGlobal(pos))
+        chosen = menu.exec(tree.viewport().mapToGlobal(pos))
         if chosen == act_zoom:
             try:
                 self._zoom_to_field(ctr_name, frm_name, int(fid), item.text(0))
@@ -3030,7 +3030,7 @@ class LkTechnikPathPlanner:
             return d or _tr("  • (keine Geometrien – nur Katalogeintrag)")
 
         msg = QMessageBox(self.iface.mainWindow())
-        msg.setIcon(QMessageBox.Warning)
+        msg.setIcon(QMessageBox.Icon.Warning)
         if len(plan) == 1:
             p0 = plan[0]
             msg.setWindowTitle(_tr("Feld löschen"))
@@ -3053,11 +3053,11 @@ class LkTechnikPathPlanner:
                     "Feldgrenze(n), Fahrspuren, Hindernisse und die Katalogeinträge:\n\n")
                 + "\n\n".join(blocks)
             )
-        msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-        msg.setDefaultButton(QMessageBox.No)
-        msg.button(QMessageBox.Yes).setText(_tr("Ja, löschen"))
-        msg.button(QMessageBox.No).setText(_tr("Abbrechen"))
-        if msg.exec_() != QMessageBox.Yes:
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg.setDefaultButton(QMessageBox.StandardButton.No)
+        msg.button(QMessageBox.StandardButton.Yes).setText(_tr("Ja, löschen"))
+        msg.button(QMessageBox.StandardButton.No).setText(_tr("Abbrechen"))
+        if msg.exec() != QMessageBox.StandardButton.Yes:
             return
 
         # Objekte aus allen Ebenen entfernen
@@ -3125,7 +3125,7 @@ class LkTechnikPathPlanner:
         line_edit = input_dlg.findChild(QLineEdit)
         if line_edit is not None:
             line_edit.setMaxLength(32)
-        ok = input_dlg.exec_() == QDialog.Accepted
+        ok = input_dlg.exec() == QDialog.DialogCode.Accepted
         new_name = input_dlg.textValue()
         if not ok:
             return
@@ -3912,10 +3912,10 @@ class LkTechnikPathPlanner:
                 _tr("Überschreiben?"),
                 _tr("Im Zielordner existiert bereits ein {format}-Export:\n{path}\n\nÜberschreiben?").format(
                     format=format_label, path=existing_path),
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
             )
-            if reply != QMessageBox.Yes:
+            if reply != QMessageBox.StandardButton.Yes:
                 return
 
         self._show_wait_message(_tr("Felddaten werden exportiert, bitte warten…"))
