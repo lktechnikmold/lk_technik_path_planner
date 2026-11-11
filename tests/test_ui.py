@@ -26,9 +26,18 @@ class TestTerminals(PluginTestCase):
     def test_formats(self):
         expected = {("CN1", "CNH"): "CN1", ("Case/Steyr", "AFS Pro 700"): "CN1",
                     ("New Holland", "Intelli View 4"): "CN1", ("New Holland", "Intelli View 12"): "4.2",
-                    ("John Deere", "GS5"): "Gen4", ("Trimble", "CFX 750"): "AgGPS", ("Claas", "S10"): "3.3"}
+                    ("John Deere", "GS4 / GS5"): "Gen4", ("Trimble", "CFX / FM / FMX / GFX / TMX"): "AgGPS", ("Claas", "S10"): "3.3",
+                    ("Case/Steyr", "Fleet Pro"): "4.2", ("Topcon", "X / XD"): "4.2", ("LACOS", "LC:ONE"): "4.2"}
         for (brand, model), fmt in expected.items():
             self.assertEqual(self.select_terminal(brand, model)[2], fmt, (brand, model))
+        self.assertNotIn(("Case/Steyr", "S-Fleet Pro"), [(t[0], t[1]) for t in mod.TERMINALS])
+        # zusammengefasste Terminals: je Marke/Format genau ein Eintrag
+        merged = {("Trimble", "AgGPS"): "CFX / FM / FMX / GFX / TMX", ("Raven", "4.2"): "CR / Viper",
+                  ("Topcon", "4.2"): "X / XD", ("John Deere", "Gen4"): "GS4 / GS5",
+                  ("New Holland", "AgGPS"): "FM 750 / FM 1000", ("Case/Steyr", "AgGPS"): "FM 750 / FM 1000",
+                  ("Deutz", "4.2"): "iMonitor"}
+        for (brand, fmt), model in merged.items():
+            self.assertEqual([t[1] for t in mod.TERMINALS if t[0] == brand and t[2] == fmt], [model], brand)
         for fmt in {t[2] for t in mod.TERMINALS}:
             self.assertNotEqual(mod._format_label(fmt), "", fmt)
 

@@ -19,8 +19,8 @@ SEGMENT_TERMINALS = [("Fendt", "One"), ("Fendt", "Vario Terminal INT 01"), ("Val
 FORMATS = {
     "ISOXML v4": (("ISOXML", "v4"), lambda out: find_file(out, "TASKDATA.XML")),
     "ISOXML v3": (("ISOXML", "v3"), lambda out: find_file(out, "TASKDATA.XML")),
-    "Gen4": (("John Deere", "GS4"), lambda out: os.path.dirname(find_file(out, "MasterData.xml"))),
-    "AgGPS": (("Trimble", "CFX 750"), lambda out: os.path.join(out, "AgGPS")),
+    "Gen4": (("John Deere", "GS4 / GS5"), lambda out: os.path.dirname(find_file(out, "MasterData.xml"))),
+    "AgGPS": (("Trimble", "CFX / FM / FMX / GFX / TMX"), lambda out: os.path.join(out, "AgGPS")),
     "CN1": (("CN1", "CNH"), lambda out: out),
 }
 

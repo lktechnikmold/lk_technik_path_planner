@@ -73,8 +73,8 @@ class TestImportIntoExistingFolder(PluginTestCase):
 
     def test_other_formats_overwrite(self):
         exports = {
-            "Gen4": (("John Deere", "GS4"), lambda o: os.path.dirname(find_file(o, "MasterData.xml"))),
-            "AgGPS": (("Trimble", "CFX 750"), lambda o: os.path.join(o, "AgGPS")),
+            "Gen4": (("John Deere", "GS4 / GS5"), lambda o: os.path.dirname(find_file(o, "MasterData.xml"))),
+            "AgGPS": (("Trimble", "CFX / FM / FMX / GFX / TMX"), lambda o: os.path.join(o, "AgGPS")),
             "CN1": (("CN1", "CNH"), lambda o: o),
         }
         for fmt, ((brand, model), src) in exports.items():

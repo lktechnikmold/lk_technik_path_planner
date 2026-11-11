@@ -141,7 +141,7 @@ class TestIsoxml(RoundtripBase):
 class TestGen4(RoundtripBase):
 
     def test_roundtrip(self):
-        out = self.export("John Deere", "GS4")
+        out = self.export("John Deere", "GS4 / GS5")
         self.assertIn("Gen4 Export erstellt", self.last_msg())
         md = find_file(out, "MasterData.xml")
         ns = "{urn:schemas-johndeere-com:Setup}"
@@ -167,7 +167,7 @@ class TestGen4(RoundtripBase):
 class TestAgGPS(RoundtripBase):
 
     def test_roundtrip(self):
-        out = self.export("Trimble", "CFX 750")
+        out = self.export("Trimble", "CFX / FM / FMX / GFX / TMX")
         self.assertIn("AgGPS-Export erstellt", self.last_msg())
         for name in ("boundary.shp", "swaths.shp", "AreaFeature.shp", "PointFeature.shp"):
             self.assertIsNotNone(find_file(out, name), name)
