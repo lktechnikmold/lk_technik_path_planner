@@ -499,8 +499,8 @@
     <columns>
       <column type="field" hidden="1" name="fid" width="303"/>
       <column type="field" hidden="0" name="ID" width="-1"/>
-      <column type="field" hidden="0" name="befahrbar" width="-1"/>
       <column type="field" hidden="0" name="Name" width="-1"/>
+      <column type="field" hidden="0" name="befahrbar" width="-1"/>
       <column type="actions" hidden="1" width="-1"/>
     </columns>
   </attributetableconfig>
@@ -529,7 +529,12 @@ def my_form_open(dialog, layer, feature):
 	control = dialog.findChild(QWidget, "MyLineEdit")
 ]]></editforminitcode>
   <featformsuppress>0</featformsuppress>
-  <editorlayout>generatedlayout</editorlayout>
+  <attributeEditorForm>
+    <attributeEditorField showLabel="1" name="ID" index="1"/>
+    <attributeEditorField showLabel="1" name="Name" index="2"/>
+    <attributeEditorField showLabel="1" name="befahrbar" index="3"/>
+  </attributeEditorForm>
+  <editorlayout>tablayout</editorlayout>
   <editable>
     <field editable="1" name="ID"/>
     <field editable="1" name="befahrbar"/>
