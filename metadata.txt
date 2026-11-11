@@ -2,8 +2,7 @@
 name=LK-Technik Path Planner
 qgisMinimumVersion=3.16
 qgisMaximumVersion=4.99
-supportsQt6=True
-version=2.2.0
+version=2.3.0
 author=Florian Köck
 email=florian.koeck@lk-noe.at
 category=Analysis
@@ -12,10 +11,11 @@ license=GPL-3.0-or-later
 homepage=https://noe.lko.at
 repository=https://github.com/lktechnikmold/lk_technik_path_planner
 tracker=https://github.com/lktechnikmold/lk_technik_path_planner/issues
-description=Import and export of guidance data for agricultural machinery: ISOXML (v3/v4), John Deere Gen4 and AgGPS.
+description=Import and export of guidance data for agricultural machinery: ISOXML (v3/v4), John Deere Gen4, AgGPS and CNH CN1. Creates guidance tracks from field boundaries.
 about=Plugin for importing and exporting guidance and field data for agricultural steering systems.
-    The export format is chosen automatically from the selected terminal (ISOXML v3/v4, John Deere Gen4, AgGPS).
-    Features a field catalogue (Felder.csv) as the single source of truth, a structured selection tree (Customer → Farm → Field), field management (add, rename, delete, dropdown selection), optional contour segments (Fendt One), and AgGPS import/export.
+    The export format is chosen automatically from the selected terminal (ISOXML v3/v4, John Deere Gen4, AgGPS, CNH CN1).
+    Features a field catalogue (Felder.csv) as the single source of truth, a structured selection tree (Customer → Farm → Field), field management (add, rename, delete, zoom, dropdown selection), optional contour segments, curve densification/extension, and automatic track creation from field boundaries (straight lines and curves, parallel offset, name prefix).
+    Runs on QGIS 3 (from 3.16) and QGIS 4.
     
     DISCLAIMER:
     This plugin is distributed under the GNU General Public License v3.0 (or later).
@@ -29,49 +29,70 @@ about=Plugin for importing and exporting guidance and field data for agricultura
     Developed by Florian Köck (LK-Technik Mold)
 experimental=False
 deprecated=False
-changelog=2.1.0 - Mehrsprachigkeit (Deutsch/Englisch)
-    - Sprachumstellung ueber Dropdown oben rechts im Path Planner, dauerhaft gespeichert.
-    - Layer werden bei Englisch umbenannt: Felder->Fields, Feldgrenzen->Boundaries, Fahrspuren->Swaths, Punkthindernis->PointFeature, Flaechenhindernis->AreaFeature.
-    - Spalten-Aliase je Sprache (Flaeche->Area, befahrbar->Passable); ID-Spalte (Feld-Zuordnung) heisst jetzt Feld/Field statt ID.
-    - Alle Buttons, Dialoge und Meldungen uebersetzt; Logo vergroessert, Kopfzeile neu angeordnet.
-    - Fix: Feld-Dropdown und Layer-Suche funktionieren jetzt zuverlaessig unabhaengig von der Sprache (kein doppelter Felder/Fields-Katalog-Layer mehr).
-    - Fix: Feld-Dropdown wird jetzt automatisch beim Oeffnen eines Projekts eingerichtet, nicht erst nach manuellem Oeffnen des Path Planners.
-    2.0.0 - Veroeffentlichung: Feld-Katalog, Terminal-Auswahl, AgGPS
-    - Feld-Katalog (Felder.csv) als zentrale Quelle: Felder ohne Grenze und mehrere Grenzen pro Feld; Felder anlegen/umbenennen/loeschen; Feld-Auswahl per Dropdown.
-    - Terminal-Auswahl bestimmt das Exportformat (ISOXML v3/v4, John Deere Gen4, AgGPS); Kontursegmente nur bei Fendt One.
-    - AgGPS-Export und -Import (Ordnerstruktur mit boundary/swaths/AreaFeature/PointFeature.shp).
-    - Diverse Stabilitaets-Fixes; Feldflaeche wird immer aus der Geometrie berechnet.
-    1.10.1 - AgGPS-Import Fix
-    - Feldflaeche wird beim Import immer aus der Geometrie berechnet (nie aus der Datei).
-    1.10.0 - AgGPS-Import
-    - Import der AgGPS-Ordnerstruktur (Data/Kunde/Betrieb/Feld) mit boundary/swaths/AreaFeature/PointFeature.shp.
-    - Wird automatisch erkannt, wenn ein AgGPS-Ordner gewaehlt wird.
-    1.9.1 - AgGPS-Export Fixes
-    - Fix: MultiLineString-Fahrspuren verursachten einen Fehler (Geraden/Kurven-Erkennung jetzt robust ueber Stuetzpunkt-Anzahl).
-    - boundary.shp enthaelt zusaetzlich die Spalte Area (Flaeche in m2).
-    1.9.0 - AgGPS-Export
-    - Export ins AgGPS-Format (Trimble/Case/New Holland u.a.): AgGPS/Data/Kunde/Betrieb/Feld/ mit boundary.shp, swaths.shp, AreaFeature.shp, PointFeature.shp.
-    - swaths.shp: Spalte id (0 = Gerade, 1 = Kurve), Spalte Name.
-    1.8.0 - Terminal-Auswahl bestimmt das Exportformat
-    - Statt v3/v4/Gen4/Kontursegmente jetzt ein Terminal-Dropdown (Marke + Modell); das Dateiformat wird automatisch gesetzt.
-    - Kontursegmente-Option erscheint nur bei Fendt One.
-    - AgGPS-Terminals (Trimble/Case/New Holland) werden erkannt, der Export ist aber noch nicht implementiert (Hinweis).
-    1.7.0 - Namensmodell & Stabilisierung
-    - Feldname = Name der ersten Feldgrenze (oder via "Feld hinzufügen"); weitere Grenzen behalten eigene Namen.
-    - Export: PFD traegt den Feldnamen, jede Feldgrenze eine eigene PLN mit eigenem Namen.
-    - Fix: kein OGR-Fehler / keine Doppelanlage mehr bei offenem Bearbeitungsmodus.
-    - Fix: Feld-Dropdown erscheint sofort nach Import und in Altprojekten.
-    1.6.0 - Felder loeschen
-    - Rechtsklick "Feld loeschen..." mit Sicherheitsabfrage; entfernt Grenzen, Fahrspuren, Hindernisse und Katalogeintrag.
-    1.5.0 - Feld-Auswahl per Dropdown
-    - ID-Feld von Feldgrenzen/Fahrspuren/Hindernissen als Value-Relation-Dropdown (zeigt Feldnamen, speichert id).
-    1.4.0 - Felder anlegen, abgleichen, umbenennen
-    - Button "Feld hinzufuegen" fuer Felder ohne Grenze.
-    - Katalog-Abgleich beim Oeffnen (inkl. IDs aus Fahrspuren/Hindernissen, Auto-ID fuer neue Grenzen).
-    - Rechtsklick "Feld umbenennen...".
-    1.3.0 - Feld-Katalog & robuster Export
-    - Neuer Feld-Katalog Felder.csv (id;Name) pro Betrieb als Source of Truth.
-    - Import (ISOXML & John Deere) schreibt alle Felder in den Katalog, auch ohne Feldgrenze.
-    - Export laeuft ueber den Katalog: Felder ohne Grenze werden exportiert, mehrere Grenzen pro Feld moeglich.
-    - Auswahlbaum zeigt Katalog-Felder; Unique-Constraint auf ID von hart auf weich (nur Warnung).
-    1.2.0 - Ausgangsversion
+changelog=2.3.0 - QGIS 4, CNH CN1, track creation
+    - Runs on QGIS 3 (from 3.16) and QGIS 4 (Qt6).
+    - CNH CN1 (Case IH/Steyr, New Holland): export and import (folder, index.vy1 or ZIP); AFS Pro 700 and Intelli View 4 export CN1.
+    - New track creation tab: guidance tracks from field boundaries (straight lines/curves, split at corners, exactly on the boundary), inward offset without shortening, tracks along shared borders, name prefix and contour segment.
+    - Holes in field boundaries and obstacles (ISOXML, Gen4).
+    - Name for area obstacles (ISOXML, Gen4, AgGPS).
+    - Zoom to field and delete several fields at once (right-click in the export tree).
+    - Overwrite confirmation on export and import; "please wait" message during import/export.
+    - Contour segments also for Fendt Vario Terminal INT 01, Valtra Smart Touch, MF Datatronic 5 and ISOXML v4.
+    - Terminal list cleaned up and extended (LACOS LC:ONE, Intelli View 12); default terminal ISOXML v4.
+    - Densify/extend curves also for Gen4 and AgGPS; Gen4 curves with at least 5 vertices.
+    - White label buffer, alphabetical field order, column order of area obstacles.
+    - Fix: a second import into the same target folder doubled all data.
+    2.2.0 - Security
+    - External XML files are parsed with defusedxml (protection against XXE/billion laughs).
+    2.1.1 - Fixes
+    - ISOXML v3 import reads tracks from GGP/GPN.
+    - Passable/not passable is translated; field boundary colours across all customers.
+    2.1.0 - Multilingual (German/English)
+    - Language switch via dropdown at the top right of the Path Planner, saved permanently.
+    - In English the layers are renamed: Felder->Fields, Feldgrenzen->Boundaries, Fahrspuren->Swaths, Punkthindernis->PointFeature, Flaechenhindernis->AreaFeature.
+    - Column aliases per language (Flaeche->Area, befahrbar->Passable); the ID column (field assignment) is now called Feld/Field.
+    - All buttons, dialogs and messages translated; larger logo, rearranged header.
+    - Retrofit terminals: CHC NAV, FJ Dynamics, Sveaverken Autosteer, Case/Steyr S-Fleet Pro.
+    - Fix: field dropdown and layer lookup now work reliably regardless of the language (no duplicate Felder/Fields catalogue layer).
+    - Fix: the field dropdown is set up when a project is opened, not only after opening the Path Planner.
+    2.0.1 - Gen4 multi-boundary import
+    - John Deere Gen4 import of fields with several boundaries; new style for tracks; column Feldnummer renamed to Feld.
+    2.0.0 - Release: field catalogue, terminal selection, AgGPS
+    - Field catalogue (Felder.csv) as the central source: fields without boundary and several boundaries per field; create/rename/delete fields; field selection by dropdown.
+    - Terminal selection sets the export format (ISOXML v3/v4, John Deere Gen4, AgGPS); contour segments only for Fendt One.
+    - AgGPS export and import (folder structure with boundary/swaths/AreaFeature/PointFeature.shp).
+    - Various stability fixes; the field area is always calculated from the geometry.
+    1.10.1 - AgGPS import fix
+    - The field area is always calculated from the geometry on import (never read from the file).
+    1.10.0 - AgGPS import
+    - Import of the AgGPS folder structure (Data/Customer/Farm/Field) with boundary/swaths/AreaFeature/PointFeature.shp.
+    - Detected automatically when an AgGPS folder is selected.
+    1.9.1 - AgGPS export fixes
+    - Fix: MultiLineString tracks caused an error (straight/curve detection now robust via the vertex count).
+    - boundary.shp additionally contains the column Area (area in m2).
+    1.9.0 - AgGPS export
+    - Export to the AgGPS format (Trimble/Case/New Holland and others): AgGPS/Data/Customer/Farm/Field/ with boundary.shp, swaths.shp, AreaFeature.shp, PointFeature.shp.
+    - swaths.shp: column id (0 = straight, 1 = curve), column Name.
+    1.8.0 - Terminal selection sets the export format
+    - Instead of v3/v4/Gen4/contour segments a terminal dropdown (brand + model); the file format is set automatically.
+    - The contour segments option only appears for Fendt One.
+    - AgGPS terminals (Trimble/Case/New Holland) are recognised, the export is not implemented yet (notice).
+    1.7.0 - Naming model and stabilisation
+    - Field name = name of the first boundary (or via "Feld hinzufuegen"); further boundaries keep their own names.
+    - Export: the PFD carries the field name, each boundary its own PLN with its own name.
+    - Fix: no OGR error / no duplicate field with an open edit session.
+    - Fix: field dropdown appears right after import and in old projects.
+    1.6.0 - Delete fields
+    - Right-click "Feld loeschen..." with confirmation; removes boundaries, tracks, obstacles and catalogue entry.
+    1.5.0 - Field selection by dropdown
+    - ID field of boundaries/tracks/obstacles as value relation dropdown (shows field names, stores id).
+    1.4.0 - Create, synchronise and rename fields
+    - Button "Feld hinzufuegen" for fields without boundary.
+    - Catalogue synchronisation on open (incl. IDs from tracks/obstacles, auto ID for new boundaries).
+    - Right-click "Feld umbenennen...".
+    1.3.0 - Field catalogue and robust export
+    - New field catalogue Felder.csv (id;Name) per farm as source of truth.
+    - Import (ISOXML & John Deere) writes all fields to the catalogue, also without boundary.
+    - Export iterates over the catalogue: fields without boundary are exported, several boundaries per field possible.
+    - Selection tree shows catalogue fields; unique constraint on ID changed from hard to soft (warning only).
+    1.2.0 - Initial version

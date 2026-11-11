@@ -2,9 +2,9 @@
 
 LK-Technik Path Planner – Combined QGIS Plugin (Import & Export)
 
-This plugin provides import and export functionality for guidance data in agricultural workflows, supporting both ISOXML and John Deere Gen4 formats within QGIS.
+This plugin provides import and export functionality for guidance data in agricultural workflows, supporting ISOXML (v3/v4), John Deere Gen4, AgGPS and CNH CN1 within QGIS. It can also create guidance tracks from field boundaries.
 
-Developed for QGIS 3.x
+Runs on QGIS 3 (from 3.16) and QGIS 4.
 
 ---
 
@@ -23,8 +23,9 @@ For full warranty and liability terms, see Sections 15 and 16 of the GNU General
 
 The LK-Technik Path Planner combines:
 
-Import (ISOXML / John Deere Gen4 → QGIS)
-Export (QGIS → ISOXML / John Deere Gen4)
+Import (ISOXML / John Deere Gen4 / AgGPS / CNH CN1 → QGIS)
+Export (QGIS → ISOXML / John Deere Gen4 / AgGPS / CNH CN1)
+Track creation (field boundaries → guidance tracks)
 
 It enables seamless exchange of guidance lines and field data between farm machinery and GIS.
 
@@ -34,16 +35,18 @@ The plugin supports structured ISOXML data (e.g. TASKDATA.XML) and integrates di
 
 ## Features
 
-- Single dialog with **Import** and **Export** mode
+- Single dialog with **Import**, **Export** and **Track creation** mode
 - **Export**:
   - Reads project tree (client → farm → layers)
-  - Selectable tree with checkboxes for customers, companies, and fields (from the *Feldgrenzen* layer)
-  - Supports **ISOXML v3**, **ISOXML v4** and **John Deere Gen4**
-  - Optional contour segmentation (ISOXML v4 only)
+  - Selectable tree with checkboxes for customers, companies, and fields
+  - The terminal selection sets the format: **ISOXML v3**, **ISOXML v4**, **John Deere Gen4**, **AgGPS** or **CNH CN1**
+  - Optional contour segments (Fendt One, Fendt Vario Terminal INT 01, Valtra Smart Touch, MF Datatronic 5, ISOXML v4)
   - Optional curve densification and extension at line ends
+  - Right-click on a field: zoom to field, rename, delete (several fields at once)
 
 - **Import**:
-  - Reads `TASKDATA.XML`, `MasterData.XML` or Folder with `TASKDATA.XML` or `MasterData.XML` in it.
+  - Reads `TASKDATA.XML`, `MasterData.xml`, an AgGPS folder, a CN1 folder (`index.vy1`) or the CN1 ZIP file
+  - Asks before overwriting farms already imported into the target folder
   - Creates structured layer groups (client → farm)
   - Generates layers:
     - Felder (field catalogue, `Felder.csv`)
@@ -52,6 +55,13 @@ The plugin supports structured ISOXML data (e.g. TASKDATA.XML) and integrates di
     - Punkthindernis
     - Flaechenhindernis
   - Optional export per FRM as GeoPackage (GPKG)
+
+- **Track creation**:
+  - Creates guidance tracks from the boundaries of the selected fields: split at corners,
+    2 vertices = straight line, 3 or more = curve, pieces under 15 m are dropped
+  - Tracks lie exactly on the boundary and are shifted parallel inwards by the chosen distance
+  - Tracks along borders where two boundaries of a field touch
+  - Optional name prefix and contour segment
 
 ### Field catalogue (`Felder.csv`)
 
@@ -108,6 +118,14 @@ delimiter (UTF-8 with BOM).
 - Select **Import** or **Export**
 - Configure options
 - Click **Run**
+
+---
+
+## Tests
+
+`tests\run_tests.bat` runs the automated test suite (synthetic data only) under the
+newest installed QGIS 3 and QGIS 4. Enable the pre-push hook once per clone with
+`git config core.hooksPath tools/hooks` so the tests run before every push.
 
 ---
 

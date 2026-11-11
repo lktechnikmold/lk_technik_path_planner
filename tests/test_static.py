@@ -108,10 +108,24 @@ class TestMetadata(unittest.TestCase):
         cp = configparser.ConfigParser()
         cp.read(os.path.join(PLUGIN_DIR, "metadata.txt"), encoding="utf-8")
         g = cp["general"]
-        self.assertEqual(g.get("supportsQt6", "").lower(), "true")
+        # QGIS 4 wird nur über qgisMaximumVersion erkannt; supportsQt6 lehnt
+        # plugins.qgis.org als veraltet ab
+        self.assertNotIn("supportsqt6", {k.lower() for k in g})
         self.assertGreaterEqual(float(g["qgisMaximumVersion"]), 4.0)
         self.assertLess(float(g["qgisMinimumVersion"]), 4.0)
         self.assertTrue(re.match(r"^\d+\.\d+\.\d+$", g["version"]), g["version"])
+
+    def test_version_everywhere(self):
+        """Versionsnummer in metadata.txt, Dateikopf, ISOXML-Export und CHANGELOG gleich."""
+        cp = configparser.ConfigParser()
+        cp.read(os.path.join(PLUGIN_DIR, "metadata.txt"), encoding="utf-8")
+        version = cp["general"]["version"]
+        main = read_text(os.path.join(PLUGIN_DIR, "lk_technik_path_planner.py"))
+        self.assertIn(f"Version: {version}\n", main)
+        self.assertIn(f'"ManagementSoftwareVersion": "{version}"', main)
+        self.assertTrue(cp["general"]["changelog"].startswith(f"{version} "), "metadata.txt: changelog")
+        first = re.search(r"^## \[([^\]]+)\]", read_text(os.path.join(PLUGIN_DIR, "CHANGELOG.md")), re.M)
+        self.assertEqual(first.group(1), version, "CHANGELOG.md: oberster Eintrag")
 
     def test_sources_compile(self):
         for p in SOURCES:

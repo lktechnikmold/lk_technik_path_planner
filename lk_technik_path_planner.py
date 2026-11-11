@@ -33,8 +33,8 @@ Copyright- und Autorhinweise (Florian Köck, LK-Technik Mold) erhalten bleiben.
 
 Author: Florian Köck
 Institution: LK-Technik Mold
-Version: 2.2.0
-Date: 2026-08-05
+Version: 2.3.0
+Date: 2026-11-11
 
 Hinweis zu nosec-Markierungen B110/B112: breite except Exception: pass/
 continue-Bloecke werden hier bewusst verwendet, um robust gegenueber
@@ -4122,7 +4122,7 @@ class LkTechnikPathPlanner:
             # v4.3-Schema erlaubt 0-3; wir schreiben ebenfalls "3" fuer volle 4.3-Konformitaet.
             "VersionMinor": "3",
             "ManagementSoftwareManufacturer": "LK-Technik Mold",
-            "ManagementSoftwareVersion": "2.2.0",
+            "ManagementSoftwareVersion": "2.3.0",
             "DataTransferOrigin": "1"
         })
 
