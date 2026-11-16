@@ -29,6 +29,10 @@ DEFAULT_ANGLE_DEG = 140.0
 # Nachbarn liegen, liegen exakt auf einer Linie und werden weggelassen. Alle
 # anderen bleiben erhalten - die Spur liegt damit genau auf der Feldgrenze.
 COLLINEAR_TOL_M = 0.001
+# Punkte, die weniger als 1 cm vom vorherigen Punkt entfernt sind, gelten als
+# derselbe Punkt. Auf so einem Mini-Stück (z. B. 2 mm) zeigt die Richtung
+# zufällig irgendwohin - das ergäbe einen falschen Knick und teilte eine Kurve.
+DUPLICATE_TOL_M = 0.01
 # Knicke unter diesem Wert gelten bei abgeschrägten Ecken als Digitalisier-
 # Rauschen (ihre Richtung spielt dort keine Rolle).
 NOISE_TURN_DEG = 10.0
@@ -59,6 +63,11 @@ def _off_line(p_prev, p_curr, p_next):
     if length == 0:
         return math.hypot(p_curr.x() - p_prev.x(), p_curr.y() - p_prev.y())
     return abs(dx * (p_curr.y() - p_prev.y()) - dy * (p_curr.x() - p_prev.x())) / length
+
+
+def _same_point(a, b):
+    """Zwei Punkte liegen praktisch aufeinander (< 1 cm)."""
+    return math.hypot(a.x() - b.x(), a.y() - b.y()) < DUPLICATE_TOL_M
 
 
 def _is_collinear(p_prev, p_curr, p_next):
@@ -144,12 +153,12 @@ def ring_to_segments(ring, threshold=DEFAULT_ANGLE_DEG):
     pts = [QgsPointXY(p) for p in ring]
     if len(pts) >= 2 and pts[0] == pts[-1]:
         pts = pts[:-1]
-    # direkt aufeinanderfolgende doppelte Punkte entfernen
+    # direkt aufeinanderfolgende doppelte bzw. fast doppelte Punkte entfernen
     clean = []
     for p in pts:
-        if not clean or p != clean[-1]:
+        if not clean or not _same_point(p, clean[-1]):
             clean.append(p)
-    if len(clean) >= 2 and clean[0] == clean[-1]:
+    if len(clean) >= 2 and _same_point(clean[0], clean[-1]):
         clean.pop()
     # Punkte, die exakt auf einer Geraden liegen, sind kein Knick - sonst würde
     # aus einer geraden Kante mit Zwischenpunkt eine "Kurve" (ab 3 Stützpunkten).
@@ -282,7 +291,7 @@ def line_to_segments(line, threshold=DEFAULT_ANGLE_DEG):
     """
     clean = []
     for p in (QgsPointXY(q) for q in line):
-        if not clean or p != clean[-1]:
+        if not clean or not _same_point(p, clean[-1]):
             clean.append(p)
     changed = True
     while changed and len(clean) > 2:

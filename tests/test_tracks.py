@@ -54,6 +54,17 @@ class TestSegmentRules(PluginTestCase):
         ring = P((0, 0), (300, 0.0001), (600, 0), (600, 50), (0, 50), (0, 0))
         self.assertEqual(seg_lengths(ring), [2, 2, 2, 2])
 
+    def test_near_duplicate_vertex_does_not_split_curve(self):
+        # Bogen mit zwei Punkten 2 mm auseinander (quer zur Fahrtrichtung):
+        # das Mini-Stück darf keinen Knick und keine Teilung erzeugen
+        arc = [(100 * math.cos(math.radians(a)), 100 * math.sin(math.radians(a))) for a in range(0, 91, 10)]
+        x, y = arc[4]                                   # Punkt bei 40°, 2 mm nach außen versetzt
+        arc.insert(5, (x + 0.002 * math.cos(math.radians(40)), y + 0.002 * math.sin(math.radians(40))))
+        ring = P((0, 0), *arc, (0, 0))
+        segs = tc.ring_to_segments(ring)
+        self.assertEqual(len(segs), 3, "Gerade, ein durchgehender Bogen, Gerade")
+        self.assertEqual(max(len(s) for s in segs), 10, "Bogen mit allen 10 Punkten, Mini-Stück entfernt")
+
     def test_stub_at_sharp_tip_is_split_off(self):
         # Spitze mit kurzem Schrägstück (5,7 m) und deutlichem Knick (> 10°) danach
         ring = P((0, 0), (600, 0), (600.1, 0.05), (595, 3), (0, 3), (0, 0))
