@@ -164,12 +164,14 @@ TRANSLATIONS = {
         "Import-Optionen": "Import options",
         "Datei…": "File…",
         "Ordner…": "Folder…",
-        "TASKDATA.XML, MasterData.xml, index.vy1 oder CN1-ZIP wählen":
-            "Select TASKDATA.XML, MasterData.xml, index.vy1 or CN1 ZIP",
-        "ISOXML / Gen4 / CN1 (*.xml *.vy1 *.zip);;Alle Dateien (*)":
-            "ISOXML / Gen4 / CN1 (*.xml *.vy1 *.zip);;All files (*)",
-        "Ordner wählen (Gen4 / AgGPS / ISOXML / CN1)": "Select folder (Gen4 / AgGPS / ISOXML / CN1)",
-        "TASKDATA.XML, Gen4-, AgGPS- oder CN1-Ordner:": "TASKDATA.XML, Gen4, AgGPS or CN1 folder:",
+        "TASKDATA.XML, MasterData.xml, index.vy1, KML oder ZIP wählen":
+            "Select TASKDATA.XML, MasterData.xml, index.vy1, KML or ZIP",
+        "ISOXML / Gen4 / CN1 / AGCO KML (*.xml *.vy1 *.zip *.kml);;Alle Dateien (*)":
+            "ISOXML / Gen4 / CN1 / AGCO KML (*.xml *.vy1 *.zip *.kml);;All files (*)",
+        "Ordner wählen (Gen4 / AgGPS / ISOXML / CN1 / AGCO KML)":
+            "Select folder (Gen4 / AgGPS / ISOXML / CN1 / AGCO KML)",
+        "TASKDATA.XML, Gen4-, AgGPS-, CN1- oder AGCO-KML-Daten:":
+            "TASKDATA.XML, Gen4, AgGPS, CN1 or AGCO KML data:",
         "Ausgabe-Ordner (optional)": "Output folder (optional)",
         "Ausgabe Ordner (GPKG, optional):": "Output folder (GPKG, optional):",
         "Koordinatensystem für GPKG (Import)": "Coordinate system for GPKG (import)",
@@ -264,10 +266,8 @@ TRANSLATIONS = {
 
         # --- Meldungen: Import ---
         "Keine Datei oder kein Ordner gewählt.": "No file or folder selected.",
-        "Im gewählten Ordner wurde weder eine MasterData.xml noch eine "
-        "TASKDATA.XML gefunden.":
-            "Neither a MasterData.xml nor a TASKDATA.XML was found in the "
-            "selected folder.",
+        "Im gewählten Ordner wurden keine unterstützten Felddaten gefunden.":
+            "No supported field data was found in the selected folder.",
         "Keine ISOXML-Datei gewählt.": "No ISOXML file selected.",
         "XML-Parsing fehlgeschlagen: {e}": "XML parsing failed: {e}",
         "ISOXML importiert (CTR → FRM → Layer).":
@@ -303,6 +303,11 @@ TRANSLATIONS = {
         "CN1-Export fehlgeschlagen: {e}": "CN1 export failed: {e}",
         "CN1-Import fehlgeschlagen: {e}": "CN1 import failed: {e}",
         "CN1-Daten wurden importiert.": "CN1 data has been imported.",
+        "AGCO-KML-Export erstellt: {n} Feld(er) in {path}": "AGCO KML export created: {n} field(s) in {path}",
+        "AGCO-KML-Export fehlgeschlagen: {e}": "AGCO KML export failed: {e}",
+        "AGCO-KML-Import fehlgeschlagen: {e}": "AGCO KML import failed: {e}",
+        "AGCO-KML-Daten wurden importiert.": "AGCO KML data has been imported.",
+        "Keine Felder in den KML-Daten gefunden.": "No fields found in the KML data.",
         "Felddaten werden importiert, bitte warten…": "Importing field data, please wait…",
         "Felddaten werden exportiert, bitte warten…": "Exporting field data, please wait…",
         "Bitte warten": "Please wait",

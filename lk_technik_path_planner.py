@@ -102,6 +102,15 @@ except Exception:
     from cn1_format import find_cn1_root, existing_cn1_dirs, extract_cn1_zip
 
 try:
+    from .agco_kml_export import export_agco_kml, existing_zips as existing_agco_kml_zips
+    from .agco_kml_import import import_agco_kml
+    from .agco_kml_format import has_kml, zip_has_kml
+except Exception:
+    from agco_kml_export import export_agco_kml, existing_zips as existing_agco_kml_zips
+    from agco_kml_import import import_agco_kml
+    from agco_kml_format import has_kml, zip_has_kml
+
+try:
     from .track_creation import tracks_for_boundaries
 except Exception:
     from track_creation import tracks_for_boundaries
@@ -179,12 +188,14 @@ FELDER_CSV_DELIM = ";"
 # Terminals -> Export-Dateiformat
 # Format-Codes: "3.3" = ISOXML v3, "4.2" = ISOXML v4,
 #               "Gen4" = John Deere Gen4, "AgGPS" = Trimble/Case/NH,
-#               "CN1" = CNH (Case IH/Steyr/New Holland)
+#               "CN1" = CNH (Case IH/Steyr/New Holland),
+#               "KML" = AGCO KML (Fendt/Valtra/Massey Ferguson)
 # ============================================================
 TERMINALS = [
     ("ISOXML", "v3", "3.3"),
     ("ISOXML", "v4", "4.2"),
     ("CN1", "CNH", "CN1"),
+    ("AGCO", "KML", "KML"),
     ("Case/Steyr", "AFS Pro 700", "CN1"),
     ("Case/Steyr", "AFS Pro 1200", "4.2"),
     ("Case/Steyr", "FM 750 / FM 1000", "AgGPS"),
@@ -221,6 +232,7 @@ def _format_label(fmt: str) -> str:
         "Gen4": "John Deere Gen4",
         "AgGPS": "AgGPS",
         "CN1": "CNH CN1",
+        "KML": "AGCO KML",
     }.get(fmt, fmt)
 
 
@@ -1037,7 +1049,7 @@ class ToolboxDialog(QDialog):
             self.chk_seg.setVisible(seg_visible)
             if not seg_visible:
                 self.chk_seg.setChecked(False)
-            self.lbl_cn1_hint.setVisible(fmt == "CN1")
+            self.lbl_cn1_hint.setVisible(fmt in ("CN1", "KML"))
 
         self._refresh_terminal_format_label = _refresh_terminal_format_label
         self.cmb_terminal.currentIndexChanged.connect(self._refresh_terminal_format_label)
@@ -1151,9 +1163,9 @@ class ToolboxDialog(QDialog):
         def _pick_in_file():
             fn, _ = QFileDialog.getOpenFileName(
                 self,
-                _tr("TASKDATA.XML, MasterData.xml, index.vy1 oder CN1-ZIP wählen"),
+                _tr("TASKDATA.XML, MasterData.xml, index.vy1, KML oder ZIP wählen"),
                 '',
-                _tr('ISOXML / Gen4 / CN1 (*.xml *.vy1 *.zip);;Alle Dateien (*)')
+                _tr('ISOXML / Gen4 / CN1 / AGCO KML (*.xml *.vy1 *.zip *.kml);;Alle Dateien (*)')
             )
             if fn:
                 self.in_line.setText(fn)
@@ -1161,7 +1173,7 @@ class ToolboxDialog(QDialog):
         def _pick_in_folder():
             dn = QFileDialog.getExistingDirectory(
                 self,
-                _tr("Ordner wählen (Gen4 / AgGPS / ISOXML / CN1)")
+                _tr("Ordner wählen (Gen4 / AgGPS / ISOXML / CN1 / AGCO KML)")
             )
             if dn:
                 self.in_line.setText(dn)
@@ -1174,7 +1186,7 @@ class ToolboxDialog(QDialog):
         h1.addWidget(btn_file)
         h1.addWidget(btn_folder)
 
-        lay.addRow(self._mk_text(QLabel(), "TASKDATA.XML, Gen4-, AgGPS- oder CN1-Ordner:"), h1)
+        lay.addRow(self._mk_text(QLabel(), "TASKDATA.XML, Gen4-, AgGPS-, CN1- oder AGCO-KML-Daten:"), h1)
         self.out_dir_line = QLineEdit()
         btn_dir = self._mk_text(QPushButton(), "…")
         def _pick_dir():
@@ -3258,6 +3270,28 @@ class LkTechnikPathPlanner:
         self._apply_language_to_project()
         self.dlg.accept()
 
+    def _import_agco_kml_path(self, path, out_dir):
+        try:
+            ok = import_agco_kml(self, path, out_dir)
+        except Exception as e:
+            self.iface.messageBar().pushMessage(
+                _tr("Fehler"), _tr("AGCO-KML-Import fehlgeschlagen: {e}").format(e=e),
+                level=Qgis.Critical, duration=6
+            )
+            return
+        if not ok:
+            self.iface.messageBar().pushMessage(
+                _tr("Hinweis"), _tr("Keine Felder in den KML-Daten gefunden."),
+                level=Qgis.Info, duration=5
+            )
+            return
+        self.iface.messageBar().pushMessage(
+            _tr("Erfolgreich"), _tr("AGCO-KML-Daten wurden importiert."),
+            level=Qgis.Success, duration=5
+        )
+        self._apply_language_to_project()
+        self.dlg.accept()
+
     def _do_import(self):
         """
         Fragt nach, wenn im Zielordner schon importierte Felddaten liegen
@@ -3332,10 +3366,14 @@ class LkTechnikPathPlanner:
             # 2) Klassisches ISOXML
             if os.path.exists(isoxml_taskdata):
                 path = isoxml_taskdata
+            # 3) AGCO KML (Field_*.kml bzw. Fendt-ZIPs, auch mehrere)
+            elif has_kml(path):
+                self._import_agco_kml_path(path, out_dir)
+                return
             else:
                 self.iface.messageBar().pushMessage(
                     _tr("Fehler"),
-                    _tr("Im gewählten Ordner wurde weder eine MasterData.xml noch eine TASKDATA.XML gefunden."),
+                    _tr("Im gewählten Ordner wurden keine unterstützten Felddaten gefunden."),
                     level=Qgis.Warning,
                     duration=5
                 )
@@ -3345,6 +3383,9 @@ class LkTechnikPathPlanner:
             base = os.path.basename(path).lower()
             if base == "index.vy1":
                 self._import_cn1_path(path, out_dir)
+                return
+            if base.endswith(".kml") or (base.endswith(".zip") and zip_has_kml(path)):
+                self._import_agco_kml_path(path, out_dir)
                 return
             if base.endswith(".zip"):
                 cn1_root = extract_cn1_zip(path)
@@ -3949,6 +3990,7 @@ class LkTechnikPathPlanner:
         is_aggps = (term_fmt == "AgGPS")
         is_john_deere = (term_fmt == "Gen4")
         is_cn1 = (term_fmt == "CN1")
+        is_kml = (term_fmt == "KML")
         is_v3 = (term_fmt == "3.3")
         # Kontursegmente nur für Terminals, die sie unterstützen
         use_segments = (self.dlg.chk_seg.isChecked() and _supports_contour_segments(term_brand, term_model))
@@ -3986,6 +4028,11 @@ class LkTechnikPathPlanner:
             cn1_dirs = existing_cn1_dirs(out_dir) if os.path.isdir(out_dir) else []
             existing_path = cn1_dirs[0] if cn1_dirs else ""
             format_label = "CN1"
+        elif is_kml:
+            # je Feld eine Field_<Name>.zip; gleichnamige werden ersetzt, andere bleiben
+            zips = existing_agco_kml_zips(out_dir)
+            existing_path = zips[0] if len(zips) == 1 else (out_dir if zips else "")
+            format_label = "AGCO KML"
         else:
             existing_path = os.path.join(out_dir, "TASKDATA")
             format_label = "TASKDATA"
@@ -4006,6 +4053,44 @@ class LkTechnikPathPlanner:
 
         if existing_path and os.path.exists(existing_path) and is_cn1:
             remove_existing_cn1(out_dir)
+
+        if is_kml:
+            try:
+                res = export_agco_kml(
+                    self, out_dir, selected,
+                    densify_enabled=densify_curves,
+                    interval_m=densify_interval_m,
+                    extend_enabled=extend_curves,
+                    extend_m=extend_curves_m
+                )
+            except Exception as e:
+                self.iface.messageBar().pushMessage(
+                    _tr("Fehler"), _tr("AGCO-KML-Export fehlgeschlagen: {e}").format(e=e),
+                    level=Qgis.Critical, duration=6
+                )
+                return
+            if not res.get("ok"):
+                self.iface.messageBar().pushMessage(
+                    _tr("Hinweis"), _tr("Für die Auswahl gab es keine exportierbaren Daten."),
+                    level=Qgis.Info, duration=5
+                )
+                return
+            notes = []
+            if res.get("multi_fields"):
+                notes.append(_tr("Nur eine Feldgrenze pro Feld – exportiert wurde jeweils die größte bei: {fields}").format(
+                    fields=", ".join(res["multi_fields"])))
+            if res.get("holes"):
+                notes.append(_tr("{n} Loch/Löcher als unbefahrbare Hindernisse geschrieben.").format(n=res["holes"]))
+            msg = _tr("AGCO-KML-Export erstellt: {n} Feld(er) in {path}").format(n=len(res["files"]), path=out_dir)
+            if notes:
+                msg += " – " + " ".join(notes)
+            self.iface.messageBar().pushMessage(
+                _tr("Erfolgreich"), msg,
+                level=Qgis.Warning if res.get("multi_fields") else Qgis.Success,
+                duration=10 if notes else 5
+            )
+            self.dlg.accept()
+            return
 
         if is_cn1:
             try:

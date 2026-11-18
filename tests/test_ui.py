@@ -27,7 +27,8 @@ class TestTerminals(PluginTestCase):
         expected = {("CN1", "CNH"): "CN1", ("Case/Steyr", "AFS Pro 700"): "CN1",
                     ("New Holland", "Intelli View 4"): "CN1", ("New Holland", "Intelli View 12"): "4.2",
                     ("John Deere", "GS4 / GS5"): "Gen4", ("Trimble", "CFX / FM / FMX / GFX / TMX"): "AgGPS", ("Claas", "S10"): "3.3",
-                    ("Case/Steyr", "Fleet Pro"): "4.2", ("Topcon", "X / XD"): "4.2", ("LACOS", "LC:ONE"): "4.2"}
+                    ("Case/Steyr", "Fleet Pro"): "4.2", ("Topcon", "X / XD"): "4.2", ("LACOS", "LC:ONE"): "4.2",
+                    ("AGCO", "KML"): "KML"}
         for (brand, model), fmt in expected.items():
             self.assertEqual(self.select_terminal(brand, model)[2], fmt, (brand, model))
         self.assertNotIn(("Case/Steyr", "S-Fleet Pro"), [(t[0], t[1]) for t in mod.TERMINALS])
@@ -45,7 +46,9 @@ class TestTerminals(PluginTestCase):
         for brand, model, fmt in mod.TERMINALS:
             self.select_terminal(brand, model)
             self.assertIn(mod._format_label(fmt), self.dlg.lbl_format.text())
-            self.assertEqual(not self.dlg.lbl_cn1_hint.isHidden(), fmt == "CN1", (brand, model))
+            # nur eine Feldgrenze je Feld: CN1 und AGCO KML
+            self.assertEqual(not self.dlg.lbl_cn1_hint.isHidden(), fmt in ("CN1", "KML"), (brand, model))
+            self.assertEqual(self.dlg.chk_seg.isHidden(), not mod._supports_contour_segments(brand, model))
 
 
 class TestDialog(PluginTestCase):

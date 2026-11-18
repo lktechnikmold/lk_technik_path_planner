@@ -2,7 +2,7 @@
 
 LK-Technik Path Planner – Combined QGIS Plugin (Import & Export)
 
-This plugin provides import and export functionality for guidance data in agricultural workflows, supporting ISOXML (v3/v4), John Deere Gen4, AgGPS and CNH CN1 within QGIS. It can also create guidance tracks from field boundaries.
+This plugin provides import and export functionality for guidance data in agricultural workflows, supporting ISOXML (v3/v4), John Deere Gen4, AgGPS, CNH CN1 and AGCO KML within QGIS. It can also create guidance tracks from field boundaries.
 
 Runs on QGIS 3 (from 3.16) and QGIS 4.
 
@@ -23,8 +23,8 @@ For full warranty and liability terms, see Sections 15 and 16 of the GNU General
 
 The LK-Technik Path Planner combines:
 
-Import (ISOXML / John Deere Gen4 / AgGPS / CNH CN1 → QGIS)
-Export (QGIS → ISOXML / John Deere Gen4 / AgGPS / CNH CN1)
+Import (ISOXML / John Deere Gen4 / AgGPS / CNH CN1 / AGCO KML → QGIS)
+Export (QGIS → ISOXML / John Deere Gen4 / AgGPS / CNH CN1 / AGCO KML)
 Track creation (field boundaries → guidance tracks)
 
 It enables seamless exchange of guidance lines and field data between farm machinery and GIS.
@@ -39,13 +39,17 @@ The plugin supports structured ISOXML data (e.g. TASKDATA.XML) and integrates di
 - **Export**:
   - Reads project tree (client → farm → layers)
   - Selectable tree with checkboxes for customers, companies, and fields
-  - The terminal selection sets the format: **ISOXML v3**, **ISOXML v4**, **John Deere Gen4**, **AgGPS** or **CNH CN1**
+  - The terminal selection sets the format: **ISOXML v3**, **ISOXML v4**, **John Deere Gen4**, **AgGPS**, **CNH CN1** or **AGCO KML**
+  - AGCO KML (Fendt): one `Field_<name>.zip` per field with `.kml` and `.ini`; one boundary per field,
+    holes and all area obstacles become area obstacles, no contour segments
   - Optional contour segments (Fendt One, Fendt Vario Terminal INT 01, Valtra Smart Touch, MF Datatronic 5, ISOXML v4)
   - Optional curve densification and extension at line ends
   - Right-click on a field: zoom to field, rename, delete (several fields at once)
 
 - **Import**:
-  - Reads `TASKDATA.XML`, `MasterData.xml`, an AgGPS folder, a CN1 folder (`index.vy1`) or the CN1 ZIP file
+  - Reads `TASKDATA.XML`, `MasterData.xml`, an AgGPS folder, a CN1 folder (`index.vy1`), the CN1 ZIP file,
+    AGCO KML files or Fendt field ZIPs (also a folder with several; client/farm from the ZIP's TASKDATA,
+    otherwise "AGCO KML" / "Import")
   - Asks before overwriting farms already imported into the target folder
   - Creates structured layer groups (client → farm)
   - Generates layers:
