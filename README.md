@@ -48,8 +48,11 @@ The plugin supports structured ISOXML data (e.g. TASKDATA.XML) and integrates di
 
 - **Import**:
   - Reads `TASKDATA.XML`, `MasterData.xml`, an AgGPS folder, a CN1 folder (`index.vy1`), the CN1 ZIP file,
-    AGCO KML files or Fendt field ZIPs (also a folder with several; client/farm from the ZIP's TASKDATA,
-    otherwise "AGCO KML" / "Import")
+    AGCO KML files or Fendt field ZIPs, also from older Fendt terminals (client/farm from the ZIP's
+    TASKDATA; worked area and headland are skipped)
+  - Choosing a folder imports all guidance files in it (subfolders included); if there are several,
+    a list with checkboxes selects which ones. Data of the same client/farm from different files is
+    merged into one farm, files without client/farm go to "Unbenannter Kunde" / "Unbenannter Betrieb"
   - Asks before overwriting farms already imported into the target folder
   - Creates structured layer groups (client → farm)
   - Generates layers:

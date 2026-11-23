@@ -214,6 +214,86 @@ FENDT_STYLE_KML = "".join([
 ])
 
 
+# Älterer Fendt (Version 2.0): kein Namespace, keine TASKDATA, Dateiname = Nummer,
+# Grenze mit doppeltem Schlusspunkt, Kurve ohne doppelten Startpunkt, dazu
+# bearbeitete Fläche (MapType 4), Vorgewende (MapType 6) und Linien mit
+# Start-/Stopp-Fähnchen ohne MapType - die drei werden nicht importiert
+OLD_NAME = "Äußerer Acker"
+OLD_INI = "[General]\nMd5=@ByteArray(0)\nNAME=\\xc4u\\xdf\\x65rer Acker\nTYPE=1\nVersion=2.0\n"
+
+
+def _old_kml(doc_name=OLD_NAME):
+    ring = [(0, 0), (300, 0), (300, 200), (0, 200), (0, 0), (0, 0)]
+    head = f"<name>{doc_name}</name>" if doc_name else ""
+    return "".join([
+        "﻿<kml>\n  <Document>\n    ", head,
+        '<Style id="PushpinRed"><IconStyle><Icon><href>x</href></Icon></IconStyle></Style>',
+        _pm("", 5, f"<LineString><coordinates>{_c(*ring)}</coordinates></LineString>",
+            '<Data name="GisRefAlt"><value>278.886000708286</value></Data>'),
+        _pm("WorkedArea", 4, _poly([(10, 10), (50, 10), (50, 50), (10, 10)]),
+            '<Data name="VehicleId"><value>1</value></Data>'),
+        _pm("", 6, "<MultiGeometry>"
+                   f'<LineString id="HeadlandInteriorPolygon"><coordinates>{_c((20, 20), (280, 20), (280, 180), (20, 20))}'
+                   "</coordinates></LineString>"
+                   f'<LineString id="HeadlandExteriorPolygon"><coordinates>{_c(*ring)}</coordinates></LineString>'
+                   "</MultiGeometry>", '<Data name="HeadlandSegment"><value>0;0;0;21000;1;0</value></Data>'),
+        _pm("Teich", 3, _poly([(200, 50), (240, 50), (240, 80), (200, 80)])),
+        _pm("Stein", 2, f"<Point><coordinates>{_c((100, 50))}</coordinates></Point>"),
+        _pm("Fahne", 0, f"<Point><coordinates>{_c((150, 150))}</coordinates></Point>"),
+        _pm("Spurlinie AB", 1, *_wayline(0, (10, 10), (290, 10), (-90, 10), (910, 10))),
+        _pm("Spurlinie Kurve", 1, *_wayline(3, (10, 20), (40, 80), (30, 140), (10, 190))),
+        _pm("", None, f"<LineString><coordinates>{_c((3, 3), (297, 3))}</coordinates></LineString>"),
+        _pm("", None, f"<Point><coordinates>{_c((3, 3))}</coordinates></Point>"),
+        "\n  </Document>\n</kml>\n",
+    ])
+
+
+class TestAgcoKmlOldFendt(PluginTestCase):
+    """Format älterer Fendt-Terminals (Version 2.0, ohne Namespace)."""
+
+    def _zip(self, folder, doc_name=OLD_NAME):
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, "Field_000123.zip")
+        with zipfile.ZipFile(path, "w") as zf:
+            zf.writestr("Field_000123.kml", _old_kml(doc_name).encode("utf-8"))
+            zf.writestr("Field_000123.ini", OLD_INI.encode("ascii"))
+        return path
+
+    def test_parse(self):
+        res = F.parse_kml(_old_kml().encode("utf-8"))
+        self.assertEqual(res["name"], OLD_NAME)
+        self.assertEqual([len(r) for r in res["boundaries"][0]], [5], "doppelter Schlusspunkt entfernt")
+        self.assertEqual([n for n, _r in res["areas"]], ["Teich"], "ohne bearbeitete Fläche und Vorgewende")
+        self.assertEqual([(n, p) for n, p, _pt in res["points"]], [("Stein", 0), ("Fahne", 1)])
+        self.assertEqual([(n, len(p)) for n, _k, p in res["lines"]], [("Spurlinie AB", 2), ("Spurlinie Kurve", 4)])
+
+    def test_import_zip(self):
+        msg = self.import_path(self._zip(os.path.join(self.tmp, "stick")))
+        self.assertIn("AGCO-KML-Daten wurden importiert", msg)
+        self.assertEqual(set(groups()), {KML})
+        self.assertEqual(catalog(*KML), {1: OLD_NAME})
+        b = features(*KML, "Feldgrenzen", 1)
+        self.assertEqual(len(b), 1)
+        self.assertAlmostEqual(metric(b[0].geometry()).area(), 300 * 200, delta=60)
+        self.assertEqual(sorted((f["Name"], len(line_pts(f.geometry()))) for f in features(*KML, "Fahrspuren", 1)),
+                         [("Spurlinie AB", 2), ("Spurlinie Kurve", 4)])
+        self.assertEqual(sorted((f["Name"], int(f["befahrbar"])) for f in features(*KML, "Punkthindernis", 1)),
+                         [("Fahne", 1), ("Stein", 0)])
+        self.assertEqual([f["Name"] for f in features(*KML, "Flaechenhindernis", 1)], ["Teich"])
+
+    def test_name_from_ini(self):
+        # ohne <name> im Dokument: Feldname aus der .ini (nicht die Nummer aus dem Dateinamen)
+        self.import_path(self._zip(os.path.join(self.tmp, "stick"), doc_name=None))
+        self.assertEqual(catalog(*KML), {1: OLD_NAME})
+
+    def test_zip_and_unpacked_copy_only_once(self):
+        folder = os.path.join(self.tmp, "stick")
+        with zipfile.ZipFile(self._zip(folder)) as zf:
+            zf.extractall(os.path.join(folder, "Field_000123"))
+        self.import_path(folder)
+        self.assertEqual(catalog(*KML), {1: OLD_NAME})
+
+
 class TestAgcoKmlFormat(PluginTestCase):
     """Dateiaufbau und Import ohne Umweg über den eigenen Export."""
 

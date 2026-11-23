@@ -5,7 +5,8 @@ AGCO-KML-Import (Fendt / Valtra / Massey Ferguson).
 Liest eine Field_<Name>.kml, eine Fendt-ZIP oder einen Ordner mit mehreren
 davon (Format siehe agco_kml_format.py) und legt je Kunde/Betrieb die üblichen
 Layer an. Kunde und Betrieb stammen aus der TASKDATA in der ZIP (bzw. neben der
-.kml); fehlt sie, landen die Felder unter "AGCO KML" / "Import". Feld-IDs
+.kml); fehlt sie, landen die Felder unter "Unbenannter Kunde" /
+"Unbenannter Betrieb". Feld-IDs
 werden je Betrieb fortlaufend vergeben.
 
 Hinweis zu nosec-Markierungen B110: breite except Exception: pass-Bloecke werden hier
@@ -29,24 +30,34 @@ except Exception:
     import agco_kml_format as kml
 
 
-def _read_fields(path):
+def _read_fields(paths):
     """-> Liste von Feldern {"grower", "farm", "name", "boundaries", "areas", "points", "lines"}."""
-    fields = []
-    for kml_data, ini_data, task_data, stem in kml.read_sources(path):
-        try:
-            content = kml.parse_kml(kml_data)
-        except Exception:  # nosec B112
-            continue
-        name = (content["name"] or (kml.ini_name(ini_data) if ini_data else "")
-                or kml.name_from_stem(stem) or "Feld")
-        grower, farm = kml.taskdata_farm(task_data, name) if task_data else (None, None)
-        content.update(grower=grower or kml.DEFAULT_CUSTOMER, farm=farm or kml.DEFAULT_FARM, name=name)
-        fields.append(content)
+    fields, seen = [], set()
+    for path in ([paths] if isinstance(paths, str) else paths):
+        for item in kml.read_sources(path):
+            if item[0] not in seen:          # dieselbe KML in mehreren Quellen nur einmal
+                seen.add(item[0])
+                field = _field(*item)
+                if field is not None:
+                    fields.append(field)
     return fields
 
 
+def _field(kml_data, ini_data, task_data, stem):
+    """Ein Feld aus KML (+ .ini / TASKDATA) oder None, wenn das KML unlesbar ist."""
+    try:
+        content = kml.parse_kml(kml_data)
+    except Exception:
+        return None
+    name = (content["name"] or (kml.ini_name(ini_data) if ini_data else "")
+            or kml.name_from_stem(stem) or "Feld")
+    grower, farm = kml.taskdata_farm(task_data, name) if task_data else (None, None)
+    content.update(grower=grower or kml.DEFAULT_CUSTOMER, farm=farm or kml.DEFAULT_FARM, name=name)
+    return content
+
+
 def import_agco_kml(plugin, path, out_dir=None):
-    """Importiert AGCO-KML-Felder. Gibt True bei Erfolg zurück."""
+    """Importiert AGCO-KML-Felder (path: Datei, ZIP, Ordner oder Liste davon). True bei Erfolg."""
     try:
         from .lk_technik_path_planner import (
             _felder_csv_path_in_dir, _read_felder_csv, _write_felder_csv,

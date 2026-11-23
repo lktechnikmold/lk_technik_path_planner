@@ -88,27 +88,34 @@ except Exception:
     from john_deere_gen4_import import import_john_deere_gen4
 
 try:
-    from .aggps_import import import_aggps, detect_aggps_data_root
+    from .aggps_import import import_aggps
 except Exception:
-    from aggps_import import import_aggps, detect_aggps_data_root
+    from aggps_import import import_aggps
 
 try:
     from .cn1_export import export_cn1, remove_existing_cn1
     from .cn1_import import import_cn1
-    from .cn1_format import find_cn1_root, existing_cn1_dirs, extract_cn1_zip
+    from .cn1_format import existing_cn1_dirs, extract_cn1_zip
 except Exception:
     from cn1_export import export_cn1, remove_existing_cn1
     from cn1_import import import_cn1
-    from cn1_format import find_cn1_root, existing_cn1_dirs, extract_cn1_zip
+    from cn1_format import existing_cn1_dirs, extract_cn1_zip
 
 try:
     from .agco_kml_export import export_agco_kml, existing_zips as existing_agco_kml_zips
     from .agco_kml_import import import_agco_kml
-    from .agco_kml_format import has_kml, zip_has_kml
+    from .agco_kml_format import zip_has_kml
 except Exception:
     from agco_kml_export import export_agco_kml, existing_zips as existing_agco_kml_zips
     from agco_kml_import import import_agco_kml
-    from agco_kml_format import has_kml, zip_has_kml
+    from agco_kml_format import zip_has_kml
+
+try:
+    from .import_scan import find_datasets
+    from .import_merge import collect_new_layers, merge_batches, write_farms
+except Exception:
+    from import_scan import find_datasets
+    from import_merge import collect_new_layers, merge_batches, write_farms
 
 try:
     from .track_creation import tracks_for_boundaries
@@ -814,6 +821,66 @@ class AddFarmDialog(QDialog):
         return QgsCoordinateReferenceSystem("EPSG:4326")
 
 
+IMPORT_KIND_LABELS = {"ISOXML": "ISOXML", "Gen4": "John Deere Gen4", "AgGPS": "AgGPS",
+                      "CN1": "CNH CN1", "KML": "AGCO KML"}
+
+
+class ImportSelectionDialog(QDialog):
+    """Auswahl der Lenksystemdateien, wenn ein Ordner mehrere enthält."""
+
+    def __init__(self, entries, parent=None):
+        super().__init__(parent)
+        self.entries = list(entries)
+        self.setWindowTitle(_tr("Dateien für den Import wählen"))
+        self.setMinimumSize(640, 420)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(_tr("Im Ordner wurden {n} Lenksystemdateien gefunden. "
+                                    "Welche sollen importiert werden?").format(n=len(self.entries))))
+        self.tree = QTreeWidget()
+        self.tree.setRootIsDecorated(False)
+        self.tree.setHeaderLabels([_tr("Format"), _tr("Name"), _tr("Datei / Ordner")])
+        for i, e in enumerate(self.entries):
+            item = QTreeWidgetItem([IMPORT_KIND_LABELS.get(e["kind"], e["kind"]), e["label"], e["rel"]])
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(0, Qt.CheckState.Checked)
+            item.setData(0, Qt.ItemDataRole.UserRole, i)
+            self.tree.addTopLevelItem(item)
+        for col in range(3):
+            self.tree.resizeColumnToContents(col)
+        layout.addWidget(self.tree, 1)
+
+        row = QHBoxLayout()
+        btn_all = QPushButton(_tr("Alle"))
+        btn_none = QPushButton(_tr("Keine"))
+        btn_all.clicked.connect(lambda: self.set_checked(lambda e: True))
+        btn_none.clicked.connect(lambda: self.set_checked(lambda e: False))
+        self.btn_ok = QPushButton(_tr("Importieren"))
+        btn_cancel = QPushButton(_tr("Abbrechen"))
+        self.btn_ok.clicked.connect(self.accept)
+        btn_cancel.clicked.connect(self.reject)
+        row.addWidget(btn_all)
+        row.addWidget(btn_none)
+        row.addStretch(1)
+        row.addWidget(self.btn_ok)
+        row.addWidget(btn_cancel)
+        layout.addLayout(row)
+        self.tree.itemChanged.connect(lambda *_: self.btn_ok.setEnabled(bool(self.selected_entries())))
+
+    def set_checked(self, predicate):
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            entry = self.entries[item.data(0, Qt.ItemDataRole.UserRole)]
+            item.setCheckState(0, Qt.CheckState.Checked if predicate(entry) else Qt.CheckState.Unchecked)
+
+    def selected_entries(self):
+        out = []
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            if item.checkState(0) == Qt.CheckState.Checked:
+                out.append(self.entries[item.data(0, Qt.ItemDataRole.UserRole)])
+        return out
+
+
 class AddFieldDialog(QDialog):
     """Dialog zum Anlegen eines Feldes (Felder.csv) ohne Feldgrenze."""
     def __init__(self, farm_pairs, parent=None):
@@ -1186,7 +1253,7 @@ class ToolboxDialog(QDialog):
         h1.addWidget(btn_file)
         h1.addWidget(btn_folder)
 
-        lay.addRow(self._mk_text(QLabel(), "TASKDATA.XML, Gen4-, AgGPS-, CN1- oder AGCO-KML-Daten:"), h1)
+        lay.addRow(self._mk_text(QLabel(), "Importdateien:"), h1)
         self.out_dir_line = QLineEdit()
         btn_dir = self._mk_text(QPushButton(), "…")
         def _pick_dir():
@@ -3300,6 +3367,26 @@ class LkTechnikPathPlanner:
         path = self.dlg.in_line.text().strip()
         out_dir = self.dlg.out_dir_line.text().strip() or None
         self._import_overwrite = False
+        entries = None
+        if path and os.path.isdir(path):
+            # alle Lenksystemdateien im Ordner; bei mehreren vorher auswählen lassen
+            entries = find_datasets(path)
+            if not entries:
+                self.iface.messageBar().pushMessage(
+                    _tr("Fehler"), _tr("Im gewählten Ordner wurden keine unterstützten Felddaten gefunden."),
+                    level=Qgis.Warning, duration=5)
+                return
+            if len(entries) > 1:
+                sel = ImportSelectionDialog(entries, self.dlg if isinstance(self.dlg, QWidget) else None)
+                if sel.exec() != QDialog.DialogCode.Accepted:
+                    self.iface.messageBar().pushMessage(
+                        _tr("Hinweis"), _tr("Import abgebrochen."), level=Qgis.Info, duration=4)
+                    return
+                entries = sel.selected_entries()
+                if not entries:
+                    self.iface.messageBar().pushMessage(
+                        _tr("Hinweis"), _tr("Keine Auswahl getroffen."), level=Qgis.Info, duration=4)
+                    return
         if path and out_dir and self._existing_import_dirs(out_dir):
             reply = QMessageBox.question(
                 self.iface.mainWindow(),
@@ -3318,9 +3405,99 @@ class LkTechnikPathPlanner:
             self._import_overwrite = True
         self._show_wait_message(_tr("Felddaten werden importiert, bitte warten…"))
         try:
-            self._do_import_files()
+            if entries is None:
+                self._do_import_files()
+            else:
+                self._import_entries(entries, out_dir)
         finally:
             self._import_overwrite = False
+
+    def _import_one(self, kind, path, out_dir, finish=True):
+        """
+        Eine Lenksystemdatei (bzw. bei KML eine Liste) mit dem passenden
+        Importer einlesen. finish=True: wie ein Einzelimport mit Meldung und
+        Schließen des Dialogs; finish=False: nur einlesen (für mehrere Dateien).
+        """
+        if kind == "ISOXML":
+            return self._import_isoxml(path, out_dir, finish=finish)
+        if kind == "KML":
+            if finish:
+                self._import_agco_kml_path(path, out_dir)
+                return True
+            return import_agco_kml(self, path, out_dir)
+        if kind == "CN1":
+            if os.path.isfile(path) and path.lower().endswith(".zip"):
+                root = extract_cn1_zip(path)
+                if root is None:
+                    if finish:
+                        self.iface.messageBar().pushMessage(
+                            _tr("Fehler"), _tr("Die ZIP-Datei enthält keine CN1-Daten."),
+                            level=Qgis.Warning, duration=5)
+                    return False
+                path = root
+            if finish:
+                self._import_cn1_path(path, out_dir)
+                return True
+            return import_cn1(self, path, out_dir)
+        if kind == "Gen4":
+            ok = import_john_deere_gen4(self, path, out_dir)
+        elif kind == "AgGPS":
+            ok = import_aggps(self, path, out_dir)
+        else:
+            return False
+        if ok and finish:
+            self._apply_language_to_project()
+            self.dlg.accept()
+        return ok
+
+    def _import_entries(self, entries, out_dir):
+        """
+        Importiert die gewählten Dateien eines Ordners. Mehrere Dateien werden
+        zuerst einzeln eingelesen und dann je Kunde/Betrieb zusammengeführt
+        (Dateien ohne Kunde/Betrieb landen gemeinsam unter "Unbenannter Kunde").
+        """
+        calls = [(e["kind"], e["path"], [e["label"]]) for e in entries if e["kind"] != "KML"]
+        kml_entries = [e for e in entries if e["kind"] == "KML"]
+        if kml_entries:
+            # alle AGCO-KML-Felder in einem Durchgang (je Feld eine Datei)
+            calls.append(("KML", [e["path"] for e in kml_entries], [e["label"] for e in kml_entries]))
+        if len(calls) == 1:
+            kind, path, _labels = calls[0]
+            self._import_one(kind, path, out_dir, finish=True)
+            return
+
+        project = QgsProject.instance()
+        batches, failed, n_files = [], [], 0
+        for kind, path, labels in calls:
+            before = set(project.mapLayers())
+            try:
+                ok = self._import_one(kind, path, None, finish=False)
+            except Exception:
+                ok = False
+            new = collect_new_layers(before)
+            if ok and new:
+                batches.append(new)
+                n_files += len(labels)
+            else:
+                failed.extend(labels)
+                stray = [lid for lid in project.mapLayers() if lid not in before]
+                if stray:
+                    project.removeMapLayers(stray)
+        if not batches:
+            self.iface.messageBar().pushMessage(
+                _tr("Hinweis"), _tr("In den gewählten Dateien wurden keine Felder gefunden."),
+                level=Qgis.Info, duration=5)
+            return
+        farms = merge_batches(batches)
+        write_farms(self, farms, out_dir)
+        self._apply_language_to_project()
+        msg = _tr("{n} Datei(en) importiert, {m} Betrieb(e).").format(n=n_files, m=len(farms))
+        if failed:
+            msg += " " + _tr("Nicht importiert: {files}").format(files=", ".join(failed))
+        self.iface.messageBar().pushMessage(
+            _tr("Erfolgreich"), msg, level=Qgis.Warning if failed else Qgis.Success,
+            duration=10 if failed else 5)
+        self.dlg.accept()
 
     def _do_import_files(self):
         path = self.dlg.in_line.text().strip()
@@ -3335,42 +3512,10 @@ class LkTechnikPathPlanner:
             )
             return
 
-        # John Deere Gen4 erkennen:
-        # 1) Ordner gewählt -> direkt prüfen
-        # 2) MasterData.xml gewählt -> Ordner darüber nehmen
+        # Ordner: alle Lenksystemdateien darin (normalerweise schon in _do_import ausgewählt)
         if os.path.isdir(path):
-            gen4_master = os.path.join(path, "MasterData.xml")
-            isoxml_taskdata = os.path.join(path, "TASKDATA.XML")
-
-            # 0) CNH CN1 (<ID>.cn1-Ordner bzw. Ordner, der einen enthält)
-            if find_cn1_root(path):
-                self._import_cn1_path(path, out_dir)
-                return
-
-            # 0b) AgGPS (Shapefile-Ordnerstruktur)
-            if detect_aggps_data_root(path):
-                ok = import_aggps(self, path, out_dir)
-                if ok:
-                    self._apply_language_to_project()
-                    self.dlg.accept()
-                return
-
-            # 1) John Deere Gen4
-            if os.path.exists(gen4_master):
-                ok = import_john_deere_gen4(self, path, out_dir)
-                if ok:
-                    self._apply_language_to_project()
-                    self.dlg.accept()
-                return
-
-            # 2) Klassisches ISOXML
-            if os.path.exists(isoxml_taskdata):
-                path = isoxml_taskdata
-            # 3) AGCO KML (Field_*.kml bzw. Fendt-ZIPs, auch mehrere)
-            elif has_kml(path):
-                self._import_agco_kml_path(path, out_dir)
-                return
-            else:
+            entries = find_datasets(path)
+            if not entries:
                 self.iface.messageBar().pushMessage(
                     _tr("Fehler"),
                     _tr("Im gewählten Ordner wurden keine unterstützten Felddaten gefunden."),
@@ -3378,8 +3523,11 @@ class LkTechnikPathPlanner:
                     duration=5
                 )
                 return
+            self._import_entries(entries, out_dir)
+            return
 
-        elif os.path.isfile(path):
+        # einzelne Datei
+        if os.path.isfile(path):
             base = os.path.basename(path).lower()
             if base == "index.vy1":
                 self._import_cn1_path(path, out_dir)
@@ -3405,16 +3553,20 @@ class LkTechnikPathPlanner:
                     self.dlg.accept()
                 return
 
+        self._import_isoxml(path, out_dir)
+
+    def _import_isoxml(self, path, out_dir, finish=True):
+        """ISOXML (TASKDATA.XML) importieren. Rückgabe True bei Erfolg."""
         if not path:
             self.iface.messageBar().pushMessage(_tr("Fehler"), _tr("Keine ISOXML-Datei gewählt."), level=Qgis.Warning, duration=4)
-            return
+            return False
         try:
             tree = _SafeET.parse(path)
             root = tree.getroot()
         except Exception as e:
             self.iface.messageBar().pushMessage(
                 _tr("Fehler"), _tr("XML-Parsing fehlgeschlagen: {e}").format(e=e), level=Qgis.Critical, duration=6)
-            return
+            return False
         is_v3 = (root.get("VersionMajor", "4") == "3")
 
         #CRS Auswahl & Transform
@@ -3911,9 +4063,11 @@ class LkTechnikPathPlanner:
         self._apply_language_to_project()
         self._apply_field_dropdowns()
 
-        self.iface.messageBar().pushMessage(
-            "Success", _tr("ISOXML importiert (CTR → FRM → Layer)."), level=Qgis.Success, duration=4)
-        self.dlg.accept()
+        if finish:
+            self.iface.messageBar().pushMessage(
+                "Success", _tr("ISOXML importiert (CTR → FRM → Layer)."), level=Qgis.Success, duration=4)
+            self.dlg.accept()
+        return True
 
     # ------------------------- EXPORT -------------------------
     def _do_export(self):

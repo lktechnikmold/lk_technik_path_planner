@@ -20,11 +20,19 @@ Placemarks unterscheiden sich über ExtendedData "MapType":
                              0 = AB-Linie: A, B, dann A - 100 m und von dort
                                  1000 m in Richtung A (geodätisch, WGS84)
                              3 = Kurve: erster Punkt doppelt
+    4  bearbeitete Fläche  beim Import übergangen
+    6  Vorgewende          beim Import übergangen
 Placemarks ohne MapType sind nur Anzeigesymbole (A/B-Fähnchen an den Spuren,
-Warnsymbol am ersten Punkt eines Flächenhindernisses) und werden beim Import
-übergangen.
+Warnsymbol am ersten Punkt eines Flächenhindernisses, Linien mit Start-/Stopp-
+Fähnchen entlang der Grenze) und werden beim Import übergangen.
 
-Kunde und Betrieb stehen nicht im KML, nur in der TASKDATA der ZIP. Die Md5 in
+Ältere Fendt (Version 2.0 in der .ini) schreiben dasselbe ohne KML-Namespace
+(<kml> statt <kml xmlns=...>), ohne TASKDATA, Kurven ohne doppelten
+Startpunkt und die Feldgrenze teils mit doppeltem Schlusspunkt. Der Feldname
+steht dort teils nur in der .ini (Dateiname = Nummer, z. B. Field_045607).
+
+Kunde und Betrieb stehen nicht im KML, nur in der TASKDATA der ZIP (sonst
+"Unbenannter Kunde" / "Unbenannter Betrieb"). Die Md5 in
 der .ini lässt sich aus den Dateien nicht nachrechnen und wird nicht
 geschrieben. Kontursegmente und befahrbare Flächenhindernisse kennt das KML
 nicht.
@@ -43,7 +51,6 @@ try:
 except Exception:
     from defusedxml import ElementTree as _SafeET
 
-KML_NS = "{http://www.opengis.net/kml/2.2}"
 
 MAP_MARKER = 0          # befahrbarer Punkt
 MAP_WAYLINE = 1
@@ -57,8 +64,9 @@ WAYLINE_CURVE = 3
 AB_BACK_M = 100.0       # 3. Punkt einer AB-Linie: so weit vor A
 AB_LENGTH_M = 1000.0    # 4. Punkt: so weit hinter dem 3. Punkt
 
-DEFAULT_CUSTOMER = "AGCO KML"
-DEFAULT_FARM = "Import"
+# wie beim ISOXML-Import: Felder ohne Kunde/Betrieb landen gemeinsam hier
+DEFAULT_CUSTOMER = "Unbenannter Kunde"
+DEFAULT_FARM = "Unbenannter Betrieb"
 
 
 # ---------------------------------------------------------------------------
@@ -183,22 +191,22 @@ def _closed(ring):
 def _polygons(pm):
     """Alle Polygone eines Placemarks als [[außen, loch, ...], ...] (lon, lat)."""
     out = []
-    for poly in pm.iter(KML_NS + "Polygon"):
+    for poly in pm.iter("Polygon"):
         rings = []
         for tag in ("outerBoundaryIs", "innerBoundaryIs"):
-            for b in poly.findall(KML_NS + tag):
-                for c in b.iter(KML_NS + "coordinates"):
+            for b in poly.findall(tag):
+                for c in b.iter("coordinates"):
                     r = _closed(_coords(c))
                     if r:
                         rings.append(r)
         if rings:
             out.append(rings)
-    in_polygon = {id(r) for p in pm.iter(KML_NS + "Polygon") for r in p.iter(KML_NS + "LinearRing")}
+    in_polygon = {id(r) for p in pm.iter("Polygon") for r in p.iter("LinearRing")}
     for tag in ("LineString", "LinearRing"):
-        for ls in pm.iter(KML_NS + tag):
+        for ls in pm.iter(tag):
             if id(ls) in in_polygon:
                 continue
-            for c in ls.iter(KML_NS + "coordinates"):
+            for c in ls.iter("coordinates"):
                 r = _closed(_coords(c))
                 if r:
                     out.append([r])
@@ -211,27 +219,32 @@ def parse_kml(data):
                     "points": [(name, befahrbar, (lon, lat))], "lines": [(name, typ, [(lon, lat)])]}
     """
     root = _SafeET.fromstring(data)
-    doc = root.find(KML_NS + "Document")
+    # Neuere Fendt schreiben den KML-Namespace, ältere (Version 2.0) nicht:
+    # Namespaces entfernen, dann gilt für beide derselbe Aufbau
+    for el in root.iter():
+        if isinstance(el.tag, str) and "}" in el.tag:
+            el.tag = el.tag.split("}", 1)[1]
+    doc = root.find("Document")
     if doc is None:
         doc = root
-    res = {"name": (doc.findtext(KML_NS + "name") or "").strip(),
+    res = {"name": (doc.findtext("name") or "").strip(),
            "boundaries": [], "areas": [], "points": [], "lines": []}
-    for pm in doc.iter(KML_NS + "Placemark"):
-        data_ = {d.get("name"): (d.findtext(KML_NS + "value") or "").strip()
-                 for d in pm.iter(KML_NS + "Data")}
+    for pm in doc.iter("Placemark"):
+        data_ = {d.get("name"): (d.findtext("value") or "").strip()
+                 for d in pm.iter("Data")}
         try:
             map_type = int(data_.get("MapType", ""))
         except ValueError:
             continue                        # Anzeigesymbol (A/B-Fähnchen, Warnsymbol)
-        name = (pm.findtext(KML_NS + "name") or "").strip()
+        name = (pm.findtext("name") or "").strip()
         if map_type == MAP_BOUNDARY:
             res["boundaries"].extend(_polygons(pm))
         elif map_type == MAP_AREA_OBSTACLE:
             for rings in _polygons(pm):
                 res["areas"].append((name, rings))
         elif map_type in (MAP_POINT_OBSTACLE, MAP_MARKER):
-            for pt in pm.iter(KML_NS + "Point"):
-                for c in pt.iter(KML_NS + "coordinates"):
+            for pt in pm.iter("Point"):
+                for c in pt.iter("coordinates"):
                     pts = _coords(c)
                     if pts:
                         res["points"].append((name, 1 if map_type == MAP_MARKER else 0, pts[0]))
@@ -240,8 +253,8 @@ def parse_kml(data):
                 kind = int(data_.get("WaylineType", WAYLINE_CURVE))
             except ValueError:
                 kind = WAYLINE_CURVE
-            for ls in pm.iter(KML_NS + "LineString"):
-                for c in ls.iter(KML_NS + "coordinates"):
+            for ls in pm.iter("LineString"):
+                for c in ls.iter("coordinates"):
                     pts = _coords(c)
                     # AB: nur A und B, die Verlängerungspunkte dienen nur der Anzeige
                     pts = pts[:2] if kind == WAYLINE_AB else _dedupe(pts)
@@ -317,7 +330,13 @@ def read_sources(path):
         _from_zip(path)
     elif path.lower().endswith(".kml"):
         _from_file(path)
-    return out
+    # dieselbe KML doppelt (z. B. ZIP und daneben entpackt) nur einmal
+    seen, unique = set(), []
+    for item in out:
+        if item[0] not in seen:
+            seen.add(item[0])
+            unique.append(item)
+    return unique
 
 
 def zip_has_kml(path):
@@ -326,16 +345,6 @@ def zip_has_kml(path):
             return any(n.lower().endswith(".kml") for n in zf.namelist())
     except (zipfile.BadZipFile, OSError):
         return False
-
-
-def has_kml(path):
-    """True, wenn der Ordner (rekursiv) eine .kml oder eine ZIP mit .kml enthält."""
-    for dirpath, _dirs, files in os.walk(path):
-        for fn in files:
-            low = fn.lower()
-            if low.endswith(".kml") or (low.endswith(".zip") and zip_has_kml(os.path.join(dirpath, fn))):
-                return True
-    return False
 
 
 # ---------------------------------------------------------------------------

@@ -265,7 +265,7 @@ class PluginTestCase(unittest.TestCase):
     def last_msg(self):
         return self.msgs[-1][1] if self.msgs else ""
 
-    def import_path(self, path, out_name="import", out=None, answer=None):
+    def import_path(self, path, out_name="import", out=None, answer=None, files=None):
         """
         Import über den Dialog. Ohne out landet jeder Import in einem eigenen
         Ordner; mit out in genau diesem (answer = Antwort auf "Überschreiben?").
@@ -280,9 +280,10 @@ class PluginTestCase(unittest.TestCase):
                 out = os.path.join(self.tmp, f"{out_name}_{n}")
                 n += 1
         self.dlg.out_dir_line.setText(out)
-        with answer_dialogs(question=answer) as seen:
+        with answer_dialogs(question=answer, files=files) as seen:
             self.plugin._on_run()
         self.questions = seen["question"]
+        self.file_choices = seen["files"]
         self.dlg.refresh_tree()
         return self.last_msg()
 
@@ -324,7 +325,7 @@ class PluginTestCase(unittest.TestCase):
 # Dialoge simulieren
 # ---------------------------------------------------------------------------
 @contextlib.contextmanager
-def answer_dialogs(text=None, message_box=None, question=None, farm=None, field=None):
+def answer_dialogs(text=None, message_box=None, question=None, farm=None, field=None, files=None):
     """
     Ersetzt modale Dialoge durch feste Antworten:
       text        - Eingabe für QInputDialog (None = Abbrechen)
@@ -332,8 +333,10 @@ def answer_dialogs(text=None, message_box=None, question=None, farm=None, field=
       question    - Antwort von QMessageBox.question()
       farm        - (Kunde, Betriebsname) für den Betrieb-Dialog
       field       - ((Kunde, Betrieb), Feldname) für den Feld-Dialog
+      files       - Auswahl der Dateien beim Ordner-Import: None = alle,
+                    False = Abbrechen, sonst Funktion(Eintrag) -> anhaken ja/nein
     """
-    seen = {"question": [], "message_box": [], "information": [], "warning": []}
+    seen = {"question": [], "message_box": [], "information": [], "warning": [], "files": []}
 
     def _input_exec(self_dlg):
         if text is None:
@@ -367,7 +370,15 @@ def answer_dialogs(text=None, message_box=None, question=None, farm=None, field=
         self_dlg.edit_name.setText(name or "")
         return QDialog.DialogCode.Accepted
 
-    with patch.object(mod.QInputDialog, "exec", _input_exec), \
+    def _files_exec(self_dlg):
+        seen["files"].append(list(self_dlg.entries))
+        if files is False:
+            return QDialog.DialogCode.Rejected
+        if files is not None:
+            self_dlg.set_checked(files)
+        return QDialog.DialogCode.Accepted
+
+    with patch.object(mod.QInputDialog, "exec", _input_exec),             patch.object(mod.ImportSelectionDialog, "exec", _files_exec), \
             patch.object(mod.QMessageBox, "exec", _msg_exec), \
             patch.object(mod.QMessageBox, "question", staticmethod(_question)), \
             patch.object(mod.QMessageBox, "information",

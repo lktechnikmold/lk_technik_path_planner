@@ -170,8 +170,7 @@ TRANSLATIONS = {
             "ISOXML / Gen4 / CN1 / AGCO KML (*.xml *.vy1 *.zip *.kml);;All files (*)",
         "Ordner wählen (Gen4 / AgGPS / ISOXML / CN1 / AGCO KML)":
             "Select folder (Gen4 / AgGPS / ISOXML / CN1 / AGCO KML)",
-        "TASKDATA.XML, Gen4-, AgGPS-, CN1- oder AGCO-KML-Daten:":
-            "TASKDATA.XML, Gen4, AgGPS, CN1 or AGCO KML data:",
+        "Importdateien:": "Import files:",
         "Ausgabe-Ordner (optional)": "Output folder (optional)",
         "Ausgabe Ordner (GPKG, optional):": "Output folder (GPKG, optional):",
         "Koordinatensystem für GPKG (Import)": "Coordinate system for GPKG (import)",
@@ -303,6 +302,18 @@ TRANSLATIONS = {
         "CN1-Export fehlgeschlagen: {e}": "CN1 export failed: {e}",
         "CN1-Import fehlgeschlagen: {e}": "CN1 import failed: {e}",
         "CN1-Daten wurden importiert.": "CN1 data has been imported.",
+        "Dateien für den Import wählen": "Select files to import",
+        "Im Ordner wurden {n} Lenksystemdateien gefunden. Welche sollen importiert werden?":
+            "{n} guidance files were found in the folder. Which ones should be imported?",
+        "Format": "Format",
+        "Name": "Name",
+        "Datei / Ordner": "File / folder",
+        "Alle": "All",
+        "Keine": "None",
+        "Importieren": "Import",
+        "In den gewählten Dateien wurden keine Felder gefunden.": "No fields were found in the selected files.",
+        "{n} Datei(en) importiert, {m} Betrieb(e).": "{n} file(s) imported, {m} farm(s).",
+        "Nicht importiert: {files}": "Not imported: {files}",
         "AGCO-KML-Export erstellt: {n} Feld(er) in {path}": "AGCO KML export created: {n} field(s) in {path}",
         "AGCO-KML-Export fehlgeschlagen: {e}": "AGCO KML export failed: {e}",
         "AGCO-KML-Import fehlgeschlagen: {e}": "AGCO KML import failed: {e}",
