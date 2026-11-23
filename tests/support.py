@@ -115,8 +115,12 @@ TEST_DATA = [
 ]
 
 
-def write_isoxml(path, data=TEST_DATA):
-    """Schreibt die Testdaten als ISOXML v4 (TASKDATA.XML)."""
+def write_isoxml(path, data=TEST_DATA, passable_type="7"):
+    """Schreibt die Testdaten als ISOXML v4 (TASKDATA.XML).
+
+    passable_type: PolygonType befahrbarer Flächenhindernisse ("7" = Flag,
+    "8" = Other wie in Exporten bis Plugin-Version 2.3).
+    """
     root = ET.Element("ISO11783_TaskData", {
         "VersionMajor": "4", "VersionMinor": "3", "ManagementSoftwareManufacturer": "Test",
         "ManagementSoftwareVersion": "1", "DataTransferOrigin": "1"})
@@ -137,7 +141,7 @@ def write_isoxml(path, data=TEST_DATA):
                         lat, lon = ll(x, y)
                         ET.SubElement(lsg, "PNT", {"A": "2", "C": f"{lat:.9f}", "D": f"{lon:.9f}"})
             for name, passable, r in f["areas"]:
-                attrs = {"A": "8" if passable else "6"}
+                attrs = {"A": passable_type if passable else "6"}
                 if name:
                     attrs["B"] = name
                 attrs.update({"C": "0", "E": f"PLN{pln}"})
@@ -287,8 +291,8 @@ class PluginTestCase(unittest.TestCase):
         self.dlg.refresh_tree()
         return self.last_msg()
 
-    def import_test_data(self, data=TEST_DATA):
-        xml = write_isoxml(os.path.join(self.tmp, "src", "TASKDATA", "TASKDATA.XML"), data)
+    def import_test_data(self, data=TEST_DATA, passable_type="7"):
+        xml = write_isoxml(os.path.join(self.tmp, "src", "TASKDATA", "TASKDATA.XML"), data, passable_type)
         msg = self.import_path(xml, "import_src")
         self.assertIn("importiert", msg)
         return xml

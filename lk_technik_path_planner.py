@@ -3899,14 +3899,15 @@ class LkTechnikPathPlanner:
                 dp_field.addFeatures(boundary_feats)
 
             # Area obstacles - neues, normgerechtes Format: eigene PLN mit
-            # PolygonType "6" (Obstacle, nicht befahrbar) oder "8" (Other, befahrbar).
+            # PolygonType "6" (Obstacle, nicht befahrbar) oder "7"/"8" (Flag bzw. Other,
+            # befahrbar; bis Version 2.3 schrieb das Plugin "8", jetzt "7").
             # Ein LSG A=1 (Außenring) mit optional folgenden LSG A=2 (Löcher, z.B.
             # eine "Insel" innerhalb des Hindernisses) ergibt EIN Hindernis-Feature.
             for hind_pln in pfd.findall("PLN"):
                 hind_type = hind_pln.get("A")
-                if hind_type not in ("6", "8"):
+                if hind_type not in ("6", "7", "8"):
                     continue
-                bf_val = 1 if hind_type == "8" else 0
+                bf_val = 0 if hind_type == "6" else 1
                 hind_b = hind_pln.get("B")
                 hind_area_name = None if _is_nullish(hind_b) or not str(hind_b).strip() else str(hind_b).strip()
 
@@ -4679,8 +4680,8 @@ class LkTechnikPathPlanner:
                             # Normgerecht: statt eines Custom-Attributs (P094_Impassable, das es in
                             # keiner ISOXML-Version gibt) bekommt jedes Flaechenhindernis eine eigene
                             # PLN mit offiziellem PolygonType: "6"=Obstacle (nicht befahrbar) bzw.
-                            # "8"=Other (befahrbar, aber markierte Flaeche).
-                            hind_poly_type = '6' if bf_val == 0 else '8'
+                            # "7"=Flag (befahrbar, aber markierte Flaeche).
+                            hind_poly_type = '6' if bf_val == 0 else '7'
                             # optionaler Name des Hindernisses -> PLN@B (PolygonDesignator, max. 32 Zeichen)
                             fh_name = _feat_val(fh_feature, fh_fmap, "Name", default=None)
                             fh_name = "" if _is_nullish(fh_name) else str(fh_name).strip()[:32]

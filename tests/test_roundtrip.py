@@ -81,8 +81,11 @@ class TestIsoxml(RoundtripBase):
         self.assertEqual(root.get("VersionMajor"), "4")
         self.assertTrue(all(p.get("E") for p in root.iter("PLN")), "v4: jede PLN hat eine ID (E)")
         self.assertTrue(all(p.get("G") for p in root.iter("PNT") if p.get("A") in ("1", "5")), "v4: PointId (G)")
-        names = {p.get("B") for p in root.iter("PLN") if p.get("A") in ("6", "8")}
+        names = {p.get("B") for p in root.iter("PLN") if p.get("A") == "6"}
         self.assertIn("Teich", names)
+        types = sorted(p.get("A") for p in root.iter("PLN") if p.get("A") not in ("1",))
+        self.assertIn("7", types, "befahrbares Flächenhindernis als PolygonType 7 (Flag)")
+        self.assertNotIn("8", types, "PolygonType 8 wird nicht mehr geschrieben")
         self.reimport(xml)
         self._check_common()
         # ohne Haken "Kontursegmente" werden Spuren eines Segments weggelassen

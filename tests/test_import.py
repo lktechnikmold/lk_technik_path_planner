@@ -55,3 +55,13 @@ class TestIsoxmlImport(PluginTestCase):
         feats = features("Testkunde A", "Testbetrieb A", "Flaechenhindernis", 1)
         got = sorted(((val(f["Name"]), int(f["befahrbar"])) for f in feats), key=nkey)
         self.assertEqual(got, sorted([("Teich", 0), (None, 1)], key=nkey))
+
+
+class TestIsoxmlImportLegacyPassable(PluginTestCase):
+    """Exporte bis Version 2.3 schrieben befahrbare Flächenhindernisse als PolygonType 8."""
+
+    def test_type_8_is_passable(self):
+        self.import_test_data(passable_type="8")
+        feats = features("Testkunde A", "Testbetrieb A", "Flaechenhindernis", 1)
+        got = sorted(((val(f["Name"]), int(f["befahrbar"])) for f in feats), key=nkey)
+        self.assertEqual(got, sorted([("Teich", 0), (None, 1)], key=nkey))
